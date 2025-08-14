@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass, asdict
 
 from textual.app import App, ComposeResult
-from textual.widgets import Static, Input, Button, Label, Footer, Select
+from textual.widgets import Static, Input, Button, Label, Footer, Select, TextArea, DataTable
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen, ModalScreen
 from textual.reactive import reactive
@@ -271,6 +271,9 @@ class FormatStats:
     # Session history (last 5 sessions)
     session_history: List[CompletedSession] = None
     
+    # Game notes for current session
+    game_notes: List[dict] = None
+    
     # Session timer controls
     session_paused: bool = False
     total_paused_time: float = 0.0  # Total time paused in seconds
@@ -291,6 +294,8 @@ class FormatStats:
             self.session_history = []
         if self.game_durations is None:
             self.game_durations = []
+        if not hasattr(self, 'game_notes') or self.game_notes is None:
+            self.game_notes = []
     
     def get_session_win_rate(self) -> float:
         """Calculate session win rate."""
@@ -355,6 +360,9 @@ class SessionStats:
     # Session history (last 5 sessions)
     session_history: List[CompletedSession] = None
     
+    # Game notes for current session
+    game_notes: List[dict] = None
+    
     # Session timer controls
     session_paused: bool = False
     total_paused_time: float = 0.0  # Total time paused in seconds
@@ -376,6 +384,10 @@ class SessionStats:
             self.session_history = []
         if self.game_durations is None:
             self.game_durations = []
+        if not hasattr(self, 'game_notes') or self.game_notes is None:
+            self.game_notes = []
+        if not hasattr(self, 'game_notes') or self.game_notes is None:
+            self.game_notes = []
     
     def get_session_win_rate(self) -> float:
         """Calculate session win rate."""
@@ -826,7 +838,8 @@ class StateManager:
         datetime_fields = [
             'session_start_time', 'season_end_date', 'last_result_time',
             'pause_start_time', 'game_start_time',  # Timer datetime fields
-            'start_time', 'end_time'  # For CompletedSession objects
+            'start_time', 'end_time',  # For CompletedSession objects
+            'timestamp'  # For game_notes timestamps
         ]
         
         def convert_iso_string(obj, parent_key=""):
@@ -1451,6 +1464,40 @@ Started:  [{start_rank}]""", classes="season-section")
             history_lines.append("─" * 35)
             history_lines.append(f"Current:  {stats.session_wins}W-{stats.session_losses}L ({stats.get_session_win_rate():.1f}%) {bar_text}")
         
+        # Add recent game notes section
+        if hasattr(stats, 'game_notes') and stats.game_notes:
+            history_lines.append("")
+            history_lines.append("📝 RECENT NOTES")
+            
+            # Show last 3 notes
+            recent_notes = stats.game_notes[-3:] if len(stats.game_notes) > 3 else stats.game_notes
+            for note in reversed(recent_notes):
+                # Handle timestamp safely with smart date/time display
+                if 'timestamp' in note and isinstance(note['timestamp'], datetime):
+                    now = datetime.now()
+                    note_time = note['timestamp']
+                    
+                    # If note is from today, show just time. Otherwise show date + time
+                    if note_time.date() == now.date():
+                        time_str = note_time.strftime("%H:%M")
+                    else:
+                        time_str = note_time.strftime("%m/%d %H:%M")
+                else:
+                    time_str = "??:??"
+                
+                # Create summary line
+                result_icon = "🏆" if note.get('result') == 'Win' else "💀" if note.get('result') == 'Loss' else "❓"
+                summary = f"[{time_str}] {result_icon} {note['play_draw']}"
+                if note['opponent_deck']:
+                    summary += f" vs {note['opponent_deck'][:12]}"  # Truncate long names
+                
+                history_lines.append(summary)
+                
+                # Add notes preview if available
+                if note['notes']:
+                    preview = note['notes'][:30] + "..." if len(note['notes']) > 30 else note['notes']
+                    history_lines.append(f"  {preview}")
+        
         return Static("\n".join(history_lines), classes="history-section")
     
     def _calculate_session_bar_progress(self, stats: SessionStats, current_rank: ManualRank) -> int:
@@ -1483,11 +1530,58 @@ class EditStatsModal(ModalScreen):
     }
     
     #stats-dialog {
-        width: 60;
-        height: 24;
+        width: 90;
+        height: 32;
         border: thick $primary;
         background: $surface;
-        padding: 1;
+        padding: 2;
+    }
+    
+    .stats-columns {
+        height: 1fr;
+    }
+    
+    .stats-column {
+        width: 50%;
+        padding: 0 1;
+    }
+    
+    .stats-row {
+        height: 3;
+        margin: 0 0 1 0;
+    }
+    
+    .stats-label {
+        width: 16;
+        content-align: right middle;
+    }
+    
+    .stats-input {
+        width: 1fr;
+        margin-left: 1;
+    }
+    
+    .modal-buttons {
+        height: 4;
+        margin-top: 2;
+        content-align: center middle;
+    }
+    
+    .modal-title {
+        height: 3;
+        text-style: bold;
+        background: $primary;
+        color: $text;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
+    
+    .column-header {
+        text-style: bold;
+        background: $primary;
+        color: $text;
+        margin-bottom: 1;
+        content-align: center middle;
     }
     """
     
@@ -1500,39 +1594,56 @@ class EditStatsModal(ModalScreen):
         with Container(id="stats-dialog"):
             yield Label("Edit Session & Season Stats", classes="modal-title")
             
-            with Vertical():
-                # Session start time
-                with Horizontal():
-                    yield Label("Session Start:", classes="modal-label")
-                    start_time_str = self.stats.session_start_time.strftime("%H:%M") if self.stats.session_start_time else "14:00"
-                    yield Input(value=start_time_str, id="session-start-input", placeholder="HH:MM")
+            # Two-column layout
+            with Horizontal(classes="stats-columns"):
+                # Left Column - Session Stats
+                with Vertical(classes="stats-column"):
+                    yield Label("📊 SESSION STATS", classes="column-header")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Session Start:", classes="stats-label")
+                        start_time_str = self.stats.session_start_time.strftime("%H:%M") if self.stats.session_start_time else "14:00"
+                        yield Input(value=start_time_str, id="session-start-input", placeholder="HH:MM", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Session Wins:", classes="stats-label")
+                        yield Input(value=str(self.stats.session_wins), id="session-wins-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Session Losses:", classes="stats-label")
+                        yield Input(value=str(self.stats.session_losses), id="session-losses-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Current Win Streak:", classes="stats-label")
+                        yield Input(value=str(self.stats.current_win_streak), id="current-win-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Current Loss Streak:", classes="stats-label")
+                        yield Input(value=str(self.stats.current_loss_streak), id="current-loss-input", placeholder="0", classes="stats-input")
                 
-                # Best win streak
-                with Horizontal():
-                    yield Label("Best Win Streak:", classes="modal-label")
-                    yield Input(value=str(self.stats.best_win_streak), id="best-win-input", placeholder="0")
-                
-                # Worst loss streak  
-                with Horizontal():
-                    yield Label("Worst Loss Streak:", classes="modal-label")
-                    yield Input(value=str(self.stats.worst_loss_streak), id="worst-loss-input", placeholder="0")
-                
-                # Season end date
-                with Horizontal():
-                    yield Label("Season End Date:", classes="modal-label")
-                    end_date_str = self.stats.season_end_date.strftime("%m/%d/%Y") if self.stats.season_end_date else "12/31/2025"
-                    yield Input(value=end_date_str, id="season-end-date-input", placeholder="MM/DD/YYYY")
-                
-                # Season end time
-                with Horizontal():
-                    yield Label("Season End Time:", classes="modal-label")
-                    end_time_str = self.stats.season_end_date.strftime("%H:%M") if self.stats.season_end_date else "23:59"
-                    yield Input(value=end_time_str, id="season-end-time-input", placeholder="HH:MM (24h)")
-                
-                # Buttons
-                with Horizontal():
-                    yield Button("Save", id="save-btn", variant="success")
-                    yield Button("Cancel", id="cancel-btn", variant="default")
+                # Right Column - Season Stats
+                with Vertical(classes="stats-column"):
+                    yield Label("🏆 SEASON STATS", classes="column-header")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Season Wins:", classes="stats-label")
+                        yield Input(value=str(self.stats.season_wins), id="season-wins-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Season Losses:", classes="stats-label")
+                        yield Input(value=str(self.stats.season_losses), id="season-losses-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Best Win Streak:", classes="stats-label")
+                        yield Input(value=str(self.stats.best_win_streak), id="best-win-input", placeholder="0", classes="stats-input")
+                    
+                    with Horizontal(classes="stats-row"):
+                        yield Label("Worst Loss Streak:", classes="stats-label")
+                        yield Input(value=str(self.stats.worst_loss_streak), id="worst-loss-input", placeholder="0", classes="stats-input")
+            
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Save", id="save-btn", variant="success")
+                yield Button("Cancel", id="cancel-btn", variant="default")
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
@@ -1553,6 +1664,45 @@ class EditStatsModal(ModalScreen):
                     new_start = datetime.now().replace(hour=hour, minute=minute)
                 self.stats.session_start_time = new_start
             
+            # Session wins/losses
+            session_wins_str = self.query_one("#session-wins-input", Input).value.strip()
+            if session_wins_str.isdigit():
+                self.stats.session_wins = int(session_wins_str)
+            elif session_wins_str == "":
+                self.stats.session_wins = 0
+                
+            session_losses_str = self.query_one("#session-losses-input", Input).value.strip()
+            if session_losses_str.isdigit():
+                self.stats.session_losses = int(session_losses_str)
+            elif session_losses_str == "":
+                self.stats.session_losses = 0
+            
+            # Current streaks
+            current_win_str = self.query_one("#current-win-input", Input).value.strip()
+            if current_win_str.isdigit():
+                self.stats.current_win_streak = int(current_win_str)
+            elif current_win_str == "":
+                self.stats.current_win_streak = 0
+                
+            current_loss_str = self.query_one("#current-loss-input", Input).value.strip()
+            if current_loss_str.isdigit():
+                self.stats.current_loss_streak = int(current_loss_str)
+            elif current_loss_str == "":
+                self.stats.current_loss_streak = 0
+            
+            # Season wins/losses
+            season_wins_str = self.query_one("#season-wins-input", Input).value.strip()
+            if season_wins_str.isdigit():
+                self.stats.season_wins = int(season_wins_str)
+            elif season_wins_str == "":
+                self.stats.season_wins = 0
+                
+            season_losses_str = self.query_one("#season-losses-input", Input).value.strip()
+            if season_losses_str.isdigit():
+                self.stats.season_losses = int(season_losses_str)
+            elif season_losses_str == "":
+                self.stats.season_losses = 0
+            
             # Best win streak
             best_win_str = self.query_one("#best-win-input", Input).value.strip()
             if best_win_str.isdigit():
@@ -1567,23 +1717,6 @@ class EditStatsModal(ModalScreen):
             elif worst_loss_str == "":
                 self.stats.worst_loss_streak = 0
             
-            # Season end date and time
-            season_end_date_str = self.query_one("#season-end-date-input", Input).value.strip()
-            season_end_time_str = self.query_one("#season-end-time-input", Input).value.strip()
-            
-            if season_end_date_str and season_end_time_str:
-                try:
-                    # Parse MM/DD/YYYY format
-                    month, day, year = map(int, season_end_date_str.split("/"))
-                    
-                    # Parse HH:MM format (24-hour)
-                    hour, minute = map(int, season_end_time_str.split(":"))
-                    
-                    new_end_date = datetime(year, month, day, hour, minute, 0)
-                    self.stats.season_end_date = new_end_date
-                except ValueError:
-                    # If parsing fails, ignore the change
-                    pass
                 
             self.result = "saved"
             self.app.pop_screen()
@@ -1761,14 +1894,18 @@ class SetRankModal(ModalScreen):
         if event.button.id == "set-rank":
             # Get tier value
             tier_select = self.query_one("#tier-select", Select)
-            tier = RankTier(tier_select.value)
+            try:
+                tier = RankTier(tier_select.value) if tier_select.value != Select.BLANK else RankTier.BRONZE
+            except (ValueError, TypeError):
+                tier = RankTier.BRONZE  # Default to Bronze
             
             if tier == RankTier.MYTHIC:
                 # Handle Mythic rank - check if percentage or rank number
                 mythic_type_select = self.query_one("#mythic-type", Select)
                 mythic_value_input = self.query_one("#mythic-value", Input)
                 
-                if mythic_type_select.value == "Rank Number":
+                mythic_type = mythic_type_select.value if mythic_type_select.value != Select.BLANK else "Percentage"
+                if mythic_type == "Rank Number":
                     # Mythic rank number (e.g., #1247) - must be >= 1
                     try:
                         mythic_rank = int(mythic_value_input.value) if mythic_value_input.value else 1247
@@ -1803,8 +1940,16 @@ class SetRankModal(ModalScreen):
                 division_select = self.query_one("#division-select", Select) 
                 pips_select = self.query_one("#pips-select", Select)
                 
-                division = int(division_select.value)
-                pips = int(pips_select.value)
+                # Handle NoSelection cases with defaults
+                try:
+                    division = int(division_select.value) if division_select.value != Select.BLANK else 4
+                except (ValueError, TypeError):
+                    division = 4  # Default to division 4
+                
+                try:
+                    pips = int(pips_select.value) if pips_select.value != Select.BLANK else 0
+                except (ValueError, TypeError):
+                    pips = 0  # Default to 0 pips
                 
                 new_rank = ManualRank(
                     tier=tier,
@@ -1881,6 +2026,357 @@ class ConfirmationModal(ModalScreen):
     def action_cancel(self) -> None:
         """Cancel and close modal."""
         self.dismiss(False)
+
+class NotesManagerModal(ModalScreen):
+    """Modal for viewing and editing all game notes."""
+    
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "edit_selected", "Edit Selected"),
+        Binding("delete", "delete_selected", "Delete Selected"),
+    ]
+    
+    CSS = """
+    NotesManagerModal {
+        align: center middle;
+    }
+    
+    #notes-manager-dialog {
+        width: 95;
+        height: 30;
+        border: thick $primary;
+        background: $surface;
+        padding: 1;
+    }
+    
+    .notes-list {
+        height: 1fr;
+        border: solid $secondary;
+        margin: 1 0;
+    }
+    
+    .manager-buttons {
+        height: 3;
+        content-align: center middle;
+    }
+    """
+    
+    def __init__(self, notes_list, **kwargs):
+        super().__init__(**kwargs)
+        self.notes_list = notes_list
+        self.selected_note_id = None
+    
+    def compose(self) -> ComposeResult:
+        with Container(id="notes-manager-dialog"):
+            yield Label("Game Notes Manager", classes="modal-title")
+            yield Label("Use ↑↓ to select, Enter to edit, Delete to remove", classes="help-text")
+            
+            table = DataTable(id="notes-table", classes="notes-list")
+            table.add_columns("Time", "Result", "Play/Draw", "Opponent", "Notes Preview")
+            table.cursor_type = "row"
+            
+            # Populate table
+            for note in self.notes_list:
+                # Handle timestamp safely with smart date/time display
+                if 'timestamp' in note and isinstance(note['timestamp'], datetime):
+                    now = datetime.now()
+                    note_time = note['timestamp']
+                    
+                    # If note is from today, show just time. Otherwise show date + time
+                    if note_time.date() == now.date():
+                        time_str = note_time.strftime("%H:%M")
+                    else:
+                        time_str = note_time.strftime("%m/%d %H:%M")
+                else:
+                    time_str = "??:??"
+                
+                result_icon = "🏆" if note.get('result') == 'Win' else "💀" if note.get('result') == 'Loss' else "❓"
+                preview = note['notes'][:25] + "..." if len(note['notes']) > 25 else note['notes']
+                
+                table.add_row(
+                    time_str,
+                    f"{result_icon} {note.get('result', 'Unknown')}",
+                    note['play_draw'],
+                    note['opponent_deck'][:15] if note['opponent_deck'] else "",
+                    preview,
+                    key=str(note['id'])
+                )
+            
+            yield table
+            
+            with Horizontal(classes="manager-buttons"):
+                yield Button("Edit Selected", id="edit-btn", variant="primary")
+                yield Button("Delete Selected", id="delete-btn", variant="error")
+                yield Button("Close", id="close-btn", variant="default")
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "edit-btn":
+            self.action_edit_selected()
+        elif event.button.id == "delete-btn":
+            self.action_delete_selected()
+        elif event.button.id == "close-btn":
+            self.action_cancel()
+    
+    def on_data_table_row_selected(self, event) -> None:
+        """Track which note is selected."""
+        if event.row_key:
+            try:
+                self.selected_note_id = int(str(event.row_key))
+            except (ValueError, TypeError):
+                self.selected_note_id = None
+        else:
+            self.selected_note_id = None
+    
+    def action_edit_selected(self) -> None:
+        """Edit the selected note."""
+        # Try to get the currently highlighted row from the table
+        table = self.query_one("#notes-table", DataTable)
+        
+        if table.cursor_row is not None and table.cursor_row < len(self.notes_list):
+            # Use the cursor position to find the note
+            note_to_edit = self.notes_list[table.cursor_row]
+            self.selected_note_id = note_to_edit['id']
+        
+        if not self.selected_note_id:
+            self.app.notify("No note selected! Use arrow keys to select a row.", severity="warning")
+            return
+        
+        # Find the note to edit
+        note_to_edit = None
+        for note in self.notes_list:
+            if note['id'] == self.selected_note_id:
+                note_to_edit = note
+                break
+        
+        if note_to_edit:
+            # Create edit modal with pre-filled data
+            edit_modal = GameNotesModal(existing_note=note_to_edit)
+            
+            def handle_edit_result(result):
+                if result:
+                    # Update the note
+                    note_to_edit.update({
+                        'result': result['result'],
+                        'play_draw': result['play_draw'],
+                        'opponent_deck': result['opponent_deck'],
+                        'notes': result['notes']
+                    })
+                    # Refresh the table display
+                    self._refresh_table()
+                    self.app.notify("Note updated successfully!", severity="success")
+            
+            self.app.push_screen(edit_modal, handle_edit_result)
+    
+    def action_delete_selected(self) -> None:
+        """Delete the selected note."""
+        # Try to get the currently highlighted row from the table
+        table = self.query_one("#notes-table", DataTable)
+        
+        if table.cursor_row is not None and table.cursor_row < len(self.notes_list):
+            # Use the cursor position to find the note
+            note_to_delete = self.notes_list[table.cursor_row]
+            self.selected_note_id = note_to_delete['id']
+        
+        if not self.selected_note_id:
+            self.app.notify("No note selected! Use arrow keys to select a row.", severity="warning")
+            return
+        
+        # Find the note to get details for confirmation
+        note_to_delete = None
+        for note in self.notes_list:
+            if note['id'] == self.selected_note_id:
+                note_to_delete = note
+                break
+        
+        if note_to_delete:
+            # Create confirmation message
+            opponent = note_to_delete.get('opponent_deck', 'Unknown opponent')
+            result = note_to_delete.get('result', 'Unknown result')
+            confirm_msg = f"Delete this note?\n\n{result} vs {opponent}\n\nThis cannot be undone."
+            
+            # Show confirmation dialog
+            confirm_modal = ConfirmationModal(confirm_msg)
+            
+            def handle_confirmation(confirmed):
+                if confirmed:
+                    # Remove the note
+                    for i, note in enumerate(self.notes_list):
+                        if note['id'] == self.selected_note_id:
+                            self.notes_list.pop(i)
+                            break
+                    
+                    # Refresh the table display
+                    self._refresh_table()
+                    self.app.notify("Note deleted successfully!", severity="success")
+            
+            self.app.push_screen(confirm_modal, handle_confirmation)
+    
+    def _refresh_table(self) -> None:
+        """Refresh the table display after changes."""
+        table = self.query_one("#notes-table", DataTable)
+        table.clear()
+        
+        # Re-populate table with current notes
+        for note in self.notes_list:
+            # Handle timestamp safely with smart date/time display
+            if 'timestamp' in note and isinstance(note['timestamp'], datetime):
+                now = datetime.now()
+                note_time = note['timestamp']
+                
+                # If note is from today, show just time. Otherwise show date + time
+                if note_time.date() == now.date():
+                    time_str = note_time.strftime("%H:%M")
+                else:
+                    time_str = note_time.strftime("%m/%d %H:%M")
+            else:
+                time_str = "??:??"
+            
+            result_icon = "🏆" if note.get('result') == 'Win' else "💀" if note.get('result') == 'Loss' else "❓"
+            preview = note['notes'][:25] + "..." if len(note['notes']) > 25 else note['notes']
+            
+            table.add_row(
+                time_str,
+                f"{result_icon} {note.get('result', 'Unknown')}",
+                note['play_draw'],
+                note['opponent_deck'][:15] if note['opponent_deck'] else "",
+                preview,
+                key=str(note['id'])
+            )
+    
+    def action_cancel(self) -> None:
+        """Cancel and close modal."""
+        self.dismiss(None)
+
+class GameNotesModal(ModalScreen):
+    """Modal dialog for adding detailed game notes."""
+    
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+    
+    CSS = """
+    GameNotesModal {
+        align: center middle;
+    }
+    
+    #notes-dialog {
+        width: 90;
+        height: 35;
+        border: thick $primary;
+        background: $surface;
+        padding: 2;
+    }
+    
+    .notes-row {
+        height: 3;
+        margin: 0 0 1 0;
+    }
+    
+    .notes-label {
+        width: 18;
+        content-align: right middle;
+    }
+    
+    .notes-input {
+        width: 1fr;
+        margin-left: 1;
+    }
+    
+    .notes-textarea {
+        height: 10;
+        margin: 1 0;
+        border: solid $primary;
+        background: $surface;
+        color: $text;
+        padding: 1;
+    }
+    
+    .notes-textarea:focus {
+        border: thick $accent;
+    }
+    
+    .modal-buttons {
+        height: 4;
+        margin-top: 2;
+        content-align: center middle;
+        dock: bottom;
+    }
+    """
+    
+    def __init__(self, existing_note=None, **kwargs):
+        super().__init__(**kwargs)
+        self.result = None
+        self.existing_note = existing_note
+        self.is_editing = existing_note is not None
+    
+    def compose(self) -> ComposeResult:
+        with Container(id="notes-dialog"):
+            title = "Edit Game Notes" if self.is_editing else "Add Game Notes"
+            yield Label(title, classes="modal-title")
+            
+            # Pre-fill values if editing
+            result_value = self.existing_note.get('result', 'Unknown') if self.existing_note else 'Unknown'
+            play_draw_value = self.existing_note.get('play_draw', 'Unknown') if self.existing_note else 'Unknown'
+            deck_value = self.existing_note.get('opponent_deck', '') if self.existing_note else ''
+            notes_value = self.existing_note.get('notes', '') if self.existing_note else ''
+            
+            with Horizontal(classes="notes-row"):
+                yield Label("Result:", classes="notes-label")
+                yield Select([
+                    ("Unknown", "Unknown"),
+                    ("Win", "Win"),
+                    ("Loss", "Loss")
+                ], value=result_value, id="result-select", classes="notes-input")
+            
+            with Horizontal(classes="notes-row"):
+                yield Label("Play/Draw:", classes="notes-label")
+                yield Select([
+                    ("Unknown", "Unknown"),
+                    ("Play", "Play"),
+                    ("Draw", "Draw")
+                ], value=play_draw_value, id="play-draw-select", classes="notes-input")
+            
+            with Horizontal(classes="notes-row"):
+                yield Label("Opponent Deck:", classes="notes-label")
+                yield Input(value=deck_value, placeholder="e.g. Mono Red, Esper Control", id="opp-deck-input", classes="notes-input")
+            
+            yield Label("Game Notes:")
+            yield TextArea(text=notes_value, id="notes-textarea", classes="notes-textarea")
+            
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Save Note", id="save-btn", variant="success")
+                yield Button("Cancel", id="cancel-btn", variant="default")
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-btn":
+            self._save_note()
+        elif event.button.id == "cancel-btn":
+            self.action_cancel()
+    
+    def _save_note(self):
+        """Save the note only."""
+        note_data = self._get_note_data()
+        self.result = note_data
+        self.dismiss(note_data)
+    
+    def _get_note_data(self):
+        """Extract note data from the form."""
+        result_select = self.query_one("#result-select", Select)
+        play_draw_select = self.query_one("#play-draw-select", Select)
+        opp_deck_input = self.query_one("#opp-deck-input", Input)
+        notes_textarea = self.query_one("#notes-textarea", TextArea)
+        
+        return {
+            "result": result_select.value if result_select.value != Select.BLANK else "Unknown",
+            "play_draw": play_draw_select.value if play_draw_select.value != Select.BLANK else "Unknown",
+            "opponent_deck": opp_deck_input.value.strip(),
+            "notes": notes_textarea.text.strip(),
+            "timestamp": datetime.now()
+        }
+    
+    def action_cancel(self) -> None:
+        """Cancel and close modal."""
+        self.dismiss(None)
 
 # === MAIN APPLICATION ===
 
@@ -2084,6 +2580,8 @@ class ManualTUIApp(App):
     BINDINGS = [
         Binding("w", "add_win", "Add Win"),
         Binding("l", "add_loss", "Add Loss"),
+        Binding("plus", "add_win", "Add Win (+)"),
+        Binding("minus", "add_loss", "Add Loss (-)"),
         Binding("f", "switch_format", "Switch Format"),
         Binding("g", "set_goal", "Set Goal"),
         Binding("m", "toggle_mythic", "Toggle Mythic"),
@@ -2095,6 +2593,8 @@ class ManualTUIApp(App):
         Binding("e", "edit_stats", "Edit Stats"),
         Binding("s", "set_rank", "Set Rank"),
         Binding("t", "set_season_start", "Set Season Start"),
+        Binding("n", "add_game_notes", "Add Game Notes"),
+        Binding("ctrl+n", "view_all_notes", "View All Notes"),
         Binding("ctrl+q", "quit", "Quit"),
         Binding("?", "help", "Help"),
     ]
@@ -2227,6 +2727,25 @@ Streaks:  W{current_streak_text} (current)
         except:
             pass  # Ignore if section not found
     
+    def _is_goal_attained(self, current_rank: ManualRank, goal_tier, goal_division) -> bool:
+        """Check if the session goal has been attained."""
+        if not goal_tier:
+            return False
+            
+        # Handle mythic goal
+        if goal_tier == RankTier.MYTHIC or str(goal_tier) == "Mythic":
+            return current_rank.is_mythic()
+            
+        # Compare tier and division
+        current_tier_str = current_rank.tier.value if hasattr(current_rank.tier, 'value') else str(current_rank.tier)
+        goal_tier_str = goal_tier.value if hasattr(goal_tier, 'value') else str(goal_tier)
+        
+        if current_tier_str != goal_tier_str:
+            return False
+            
+        # Same tier - compare division (lower division number = higher rank)
+        return current_rank.division <= goal_division
+    
     def action_add_win(self) -> None:
         """Add a win to the session."""
         # Check goal status before the win
@@ -2337,6 +2856,60 @@ Streaks:  W{current_streak_text} (current)
         
         # Push screen and handle result when dismissed
         self.push_screen(modal, handle_result)
+    
+    def action_add_game_notes(self) -> None:
+        """Add detailed game notes with optional result application."""
+        modal = GameNotesModal()
+        
+        def handle_result(result):
+            if result:
+                # Save the note to session stats
+                if not hasattr(self.app_data.stats, 'game_notes') or self.app_data.stats.game_notes is None:
+                    self.app_data.stats.game_notes = []
+                
+                # Add note to the list
+                note_entry = {
+                    "id": len(self.app_data.stats.game_notes) + 1,
+                    "timestamp": result['timestamp'],
+                    "result": result['result'],
+                    "play_draw": result['play_draw'],
+                    "opponent_deck": result['opponent_deck'],
+                    "notes": result['notes']
+                }
+                self.app_data.stats.game_notes.append(note_entry)
+                
+                # Save state
+                self.state_manager.save_state(self.app_data)
+                
+                # Show summary toast
+                note_summary = f"{result['play_draw']}"
+                if result['opponent_deck']:
+                    note_summary += f" vs {result['opponent_deck']}"
+                
+                self.notify(f"Note saved: {note_summary}", severity="success")
+                self.refresh_panels()
+        
+        self.push_screen(modal, handle_result)
+    
+    def action_view_all_notes(self) -> None:
+        """View and edit all game notes."""
+        if not hasattr(self.app_data.stats, 'game_notes') or not self.app_data.stats.game_notes:
+            self.notify("No game notes found!", severity="warning")
+            return
+        
+        # Create the notes manager modal
+        manager_modal = NotesManagerModal(self.app_data.stats.game_notes)
+        
+        def handle_manager_result(result):
+            if result in ["updated", "deleted"]:
+                # Save state and refresh display
+                self.state_manager.save_state(self.app_data)
+                self.refresh_panels()
+                
+                action_text = "updated" if result == "updated" else "deleted"
+                self.notify(f"Note {action_text} successfully!", severity="success")
+        
+        self.push_screen(manager_modal, handle_manager_result)
     
     def action_edit_stats(self) -> None:
         """Edit session and season statistics."""
@@ -2553,10 +3126,11 @@ Streaks:  W{current_streak_text} (current)
         help_text = """MTGA Manual Tracker Help
 
 Keyboard Shortcuts:
-W - Add win         L - Add loss
+W/+ - Add win       L/- - Add loss
 F - Switch format (BO1/BO3/Limited)  
 G - Set session goal    T - Set season start rank
 E - Edit stats (streaks, session start)
+N - Add game notes    Ctrl+N - View all notes
 M - Toggle mythic progress
 C - Collapse tiers      H - Hide tiers
 R - Restart session     P - Pause/Resume timer
