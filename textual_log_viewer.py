@@ -6,7 +6,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
@@ -113,8 +113,18 @@ class MTGALogParser:
                 # Extract timestamp if available
                 if 'timestamp' in data:
                     try:
-                        ts_ms = int(data['timestamp'])
-                        timestamp = datetime.fromtimestamp(ts_ms / 1000)
+                        ts_value = int(data['timestamp'])
+                        
+                        # Handle different timestamp formats
+                        if ts_value > 635000000000000000:  # .NET ticks (started 2001-01-01)
+                            # .NET ticks: 100-nanosecond intervals since January 1, 0001 UTC
+                            # Convert to Unix epoch (ticks since 1970-01-01)
+                            unix_epoch_ticks = 621355968000000000
+                            unix_ticks = ts_value - unix_epoch_ticks
+                            timestamp = datetime.fromtimestamp(unix_ticks / 10000000)
+                        else:
+                            # Unix milliseconds
+                            timestamp = datetime.fromtimestamp(ts_value / 1000)
                     except (ValueError, OSError):
                         pass
                 
@@ -160,7 +170,7 @@ class MTGALogParser:
             is_rank_event=is_rank_event
         )
     
-    def _analyze_json_event(self, data: Dict[str, Any]) -> tuple[str, str, bool]:
+    def _analyze_json_event(self, data: Dict[str, Any]) -> Tuple[str, str, bool]:
         """Analyze JSON event with enhanced understanding."""
         event_type = "Unknown"
         content = ""
@@ -390,7 +400,7 @@ Skipped lines: {skipped:,}{error_indicator}
             return f"🎲 Die roll: {' vs '.join(rolls)}"
         return "🎲 Die roll results"
     
-    def _parse_unity_log(self, line: str) -> tuple[str, str]:
+    def _parse_unity_log(self, line: str) -> Tuple[str, str]:
         """Parse Unity logger line."""
         if '==>' in line:
             # Extract event name

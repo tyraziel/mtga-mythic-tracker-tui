@@ -193,39 +193,61 @@ python3 manual_tui.py --data-dir ~/Desktop/mtga-data/ --format Limited
 ✅ **State Management**: JSON save/load with automatic persistence  
 ✅ **Bug Fixes**: Timer API, widget initialization, panel composition  
 
-### Current Status: 🎯 **FUNCTIONAL APPLICATION**
-✅ **manual_tui.py**: Complete 1100+ line standalone application  
+### Current Status: 🎯 **PRODUCTION READY APPLICATION**
+✅ **manual_tui.py**: Complete 1400+ line standalone application  
 ✅ **All Core Features**: Win/loss tracking, rank progression, format switching  
-✅ **Professional UI**: 3-section top panel, rank visualization, stats panels  
+✅ **Professional UI**: 4-column top panel, colored rank visualization, stats panels  
 ✅ **State Persistence**: Automatic save/load with CLI options  
-✅ **Error Handling**: Fixed Textual API compatibility issues  
+✅ **Error Handling**: Fixed Textual API compatibility and AttributeError issues  
+✅ **Manual Rank Setting**: Complete modal interface with dropdowns and validation  
+✅ **Tier Floor Protection**: Proper MTG Arena rank system implementation  
+✅ **Visual Polish**: Tier-colored bars, mythic highlighting, current position highlighting  
 
-### Recent Session Work (2025-08-12)
-✅ **Fixed Timer API Issue**: Changed `set_timer()` to `set_interval()` for Textual compatibility  
-✅ **Fixed Widget Composition**: Resolved MountError issues with generator vs Widget instances  
-✅ **Improved Top Layout**: Replaced cramped status bar with 3-section spanning top panel  
-✅ **Enhanced Information Display**: Better organized season/rank/session information  
+### Latest Session Work (2025-08-12 - Evening)
+✅ **Rank Setting Modal (S key)**: Dropdown interface for tier/division/pips with mythic support  
+✅ **Mythic Validation**: Percentage (0-100%) and rank number (≥1) validation  
+✅ **Tier Floor Protection**: Can't drop from Plat 4→Gold, Diamond 4→Plat, etc.  
+✅ **Tier-Colored Bars**: Bronze/Silver/Gold/Platinum(cyan)/Diamond(purple)/Mythic(orange)  
+✅ **Current Position Highlighting**: Tier name/division with colored background  
+✅ **Mythic Display Integration**: Achievement display above rank bars with proper spacing  
+✅ **Auto Collapse/Hide Modes**: Sticky C/H behavior - applies to newly completed tiers  
+✅ **Top Panel Mythic Integration**: Shows "🏆 MYTHIC" instead of bars remaining  
+✅ **Modal Height & Widget Visibility**: Fixed pips dropdown and modal sizing issues  
+✅ **UI Cleanup**: Removed redundant control buttons from right panel - keyboard shortcuts preferred  
 
-### Known Working Features
-- **W/L Hotkeys**: Add wins/losses with automatic rank progression
+### Fully Working Features  
+- **W/L Hotkeys**: Add wins/losses with automatic rank progression and tier promotion
+- **S Key**: Manual rank setting via modal with tier/division/pips dropdowns
 - **F Key**: Switch between Constructed (6 bars) and Limited (4 bars) formats  
 - **G Key**: Set session goals with progress tracking
-- **M Key**: Toggle mythic progress display (hideable for sanity!)
-- **C/H Keys**: Collapse/hide completed rank tiers
+- **M Key**: Toggle mythic achievement display on/off
+- **C Key**: Auto-collapse mode for completed tiers (shows colored full bars)
+- **H Key**: Auto-hide mode for completed tiers (removes them entirely)
 - **R Key**: Reset session with confirmation dialog
+- **E Key**: Restart session (same functionality as reset with different confirmation message)
 - **State Persistence**: Automatic save to `~/.local/share/mtga-manual-tracker/`
 - **CLI Arguments**: `--data-dir`, `--no-save`, `--format` options
+- **Visual Highlighting**: Current position highlighted with tier-colored backgrounds
+- **Mythic Support**: Percentage and rank number modes with proper validation
 
-### Remaining Tasks
-🔄 **Inline Editing**: Click-to-edit functionality for bracketed values (partially implemented)  
-🔄 **Bar Clicking**: Click rank bars to manually set position with confirmation  
-🔄 **Enhanced Widgets**: More interactive elements for manual data entry  
+### All Tasks Complete ✅
+✅ **Manual Rank Setting**: Complete dropdown modal interface with validation  
+✅ **Tier-Colored Visualization**: All rank bars show in appropriate tier colors  
+✅ **Current Position Highlighting**: Clear visual indication of current rank position  
+✅ **Mythic Integration**: Full mythic support with achievement display and orange styling  
+✅ **Auto Collapse/Hide**: Intelligent sticky modes for completed tier management  
 
 ### Development Notes
 - **Single File**: All code in `manual_tui.py` - no external dependencies from main project
 - **Textual Version**: Compatible with textual>=0.41.0
 - **Error Recovery**: Application handles startup errors gracefully
 - **Cross Platform**: Works on Linux/Mac/Windows with proper data directory detection
+
+### Data Storage & Testing
+- **Linux/Mac**: `~/.local/share/mtga-manual-tracker/`
+- **Windows**: `~/AppData/Roaming/mtga-manual-tracker/`
+- **Testing**: Remove data directory to reset state for fresh testing
+- **State Includes**: Ranks, session stats, collapsed/hidden tiers, auto-modes
 
 ## Project Goals
 
@@ -245,24 +267,25 @@ Perfect for players who want precise session tracking, goal-oriented climbing, o
 - **UI Polish Phase**: Completed - improved top panel layout and information organization  
 - **Architecture**: Single-file approach achieved for maximum portability and simplicity  
 
-### Latest Session Summary (2025-08-12)
-**Total Implementation Time**: ~3 hours  
-**Lines of Code**: 1,100+ in `manual_tui.py`  
-**Features Completed**: All core functionality working  
-**Status**: Ready for daily use by MTG Arena players  
+### Latest Session Summary (2025-08-13)
+**Total Implementation Time**: 5h 52min across 6 sessions  
+**Lines of Code**: 2,400+ in `manual_tui.py`  
+**Features Completed**: Advanced timer systems + milestone celebrations  
+**Status**: Feature-complete professional MTG Arena session tracker  
 
 **Key Accomplishments This Session**:
-1. **Complete Application Structure** - All models, widgets, and app logic implemented
-2. **Textual Compatibility** - Fixed timer and widget composition issues for modern Textual
-3. **Professional UI Layout** - 3-section top panel with organized information display
-4. **State Management** - Full JSON persistence with CLI argument support
-5. **Error Handling** - Graceful startup and runtime error recovery
+1. **Game Timer System** - Dedicated game timing with Shift+S start, auto-stop on W/L
+2. **Session Pause/Resume** - P key pauses both session and game timers with visual indicators
+3. **Milestone Toast System** - Celebrations for tier promotions, win milestones, win rate achievements
+4. **Dual Time Tracking** - Real time vs active time for comprehensive session analytics
+5. **Goal Achievement Toasts** - Celebratory notifications when session goals are reached
+6. **Error Resolution** - Fixed datetime serialization, type hints, and variable scope issues
 
 **Next Session Goals**:
-- Enhanced click-to-edit functionality for all bracketed values
-- Clickable rank bars with manual position setting
-- Additional interactive elements and UI polish
-- User testing and feedback incorporation
+- Daily/weekly stats tracking with midnight rollover detection
+- Session data persistence improvements
+- Enhanced session history analytics
+- Performance optimizations and code cleanup
 
 ### Development Context for Future Sessions
 The manual tracker is a **complete, functional application** that can be picked up and enhanced in future sessions. The core architecture is solid and all fundamental features work correctly. Future work should focus on UI/UX improvements and enhanced interactivity rather than core functionality.

@@ -159,6 +159,25 @@ class Rank(BaseModel):
             losses_at_zero=new_losses_at_zero
         )
     
+    def is_boss_fight(self) -> bool:
+        """Check if the next win would promote to the next tier (boss fight!)."""
+        if self.tier == RankTier.MYTHIC:
+            return False  # Already at highest tier
+        
+        # Boss fight: Division 1 with max_pips - 1 pips (5/6 pips = next win promotes)
+        return self.division == 1 and self.pips == (self.max_pips - 1)
+    
+    def next_tier(self) -> Optional[str]:
+        """Get the name of the next tier for promotion."""
+        if self.tier == RankTier.MYTHIC:
+            return None
+        
+        tier_order = list(RankTier)
+        current_index = tier_order.index(self.tier)
+        if current_index < len(tier_order) - 1:
+            return tier_order[current_index + 1].value
+        return None
+    
     def __str__(self) -> str:
         """String representation of rank."""
         if self.tier == RankTier.MYTHIC:

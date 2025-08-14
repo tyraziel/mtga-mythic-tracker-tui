@@ -86,6 +86,12 @@ class RankProgressWidget(Static):
         """Create ASCII rank visualization."""
         rank = self.current_rank
         
+        # Boss fight indicator
+        boss_fight_msg = ""
+        if hasattr(rank, 'is_boss_fight') and rank.is_boss_fight():
+            next_tier = rank.next_tier() if hasattr(rank, 'next_tier') else "Next Tier"
+            boss_fight_msg = f"🔥 BOSS FIGHT! Next win → {next_tier}! 🔥\n"
+        
         # Tier progression
         tiers = ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Mythic"]
         current_tier_idx = next((i for i, tier in enumerate(tiers) if tier == rank.tier), 0)
@@ -99,7 +105,12 @@ class RankProgressWidget(Static):
             elif i == current_tier_idx:
                 # Current tier with pip progress
                 pips_display = self._format_pips(rank.division, rank.pips)
-                tier_display.append(f"{tier:<8} {pips_display}")
+                
+                # Add boss fight styling to current tier
+                if hasattr(rank, 'is_boss_fight') and rank.is_boss_fight():
+                    tier_display.append(f"{tier:<8} {pips_display} ⚔️ BOSS TIER!")
+                else:
+                    tier_display.append(f"{tier:<8} {pips_display}")
             else:
                 # Future tier
                 tier_display.append(f"{tier:<8} [    ][    ][    ][    ]")
@@ -110,7 +121,7 @@ class RankProgressWidget(Static):
             if percentage:
                 tier_display[-1] = f"Mythic   {percentage:.1f}% (Top Mythic)"
         
-        return "\n".join(tier_display)
+        return boss_fight_msg + "\n".join(tier_display)
     
     def _format_pips(self, division: int, pips: int) -> str:
         """Format pips for current division."""
