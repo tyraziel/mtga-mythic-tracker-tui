@@ -203,13 +203,38 @@ class ManualRank:
             format_type=self.format_type
         )
     
+    def get_bars_per_win(self) -> int:
+        """Get the number of bars (pips) gained per win for this rank and format."""
+        if self.format_type == FormatType.CONSTRUCTED_BO3:
+            # BO3 is double the pips of BO1
+            if self.tier in [RankTier.BRONZE, RankTier.SILVER, RankTier.GOLD]:
+                return 4  # Double of 2
+            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
+                return 2  # Double of 1
+            else:
+                return 2
+        else:
+            # BO1 or Limited - standard progression
+            if self.tier in [RankTier.BRONZE, RankTier.SILVER, RankTier.GOLD]:
+                return 2
+            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
+                return 1
+            else:
+                return 1
+    
     def is_boss_fight(self) -> bool:
         """Check if the next win would promote to the next tier (boss fight!)."""
         if self.is_mythic():
             return False  # Already at highest tier
         
-        # Boss fight: Division 1 with max_pips - 1 pips (5/6 pips = next win promotes)
-        return self.division == 1 and self.pips == (self.max_pips - 1)
+        if self.division != 1:
+            return False  # Must be in Division 1 to be close to tier promotion
+        
+        # Determine bars gained per win based on tier
+        bars_per_win = self.get_bars_per_win()
+        
+        # Boss fight: when pips + bars_per_win >= max_pips (would promote to next tier)
+        return self.pips + bars_per_win >= self.max_pips
     
     def next_tier(self) -> Optional[str]:
         """Get the name of the next tier for promotion."""
@@ -321,6 +346,12 @@ class FormatStats:
         self.last_result_time = datetime.now()
         # Reset paused time counter for last result tracking
         self.paused_time_since_last_result = 0.0
+        
+        # Track all session game results
+        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
+            self.session_game_results = []
+        self.session_game_results.append('W')
+        # Keep ALL results for the session (don't limit to 10)
     
     def add_loss(self):
         """Add a loss to session and update streaks."""
@@ -332,6 +363,12 @@ class FormatStats:
         self.last_result_time = datetime.now()
         # Reset paused time counter for last result tracking
         self.paused_time_since_last_result = 0.0
+        
+        # Track all session game results
+        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
+            self.session_game_results = []
+        self.session_game_results.append('L')
+        # Keep ALL results for the session (don't limit to 10)
 
 @dataclass  
 class SessionStats:
@@ -363,6 +400,9 @@ class SessionStats:
     # Game notes for current session
     game_notes: List[dict] = None
     
+    # Session game results (for L10 display)
+    session_game_results: List[str] = None
+    
     # Session timer controls
     session_paused: bool = False
     total_paused_time: float = 0.0  # Total time paused in seconds
@@ -386,8 +426,8 @@ class SessionStats:
             self.game_durations = []
         if not hasattr(self, 'game_notes') or self.game_notes is None:
             self.game_notes = []
-        if not hasattr(self, 'game_notes') or self.game_notes is None:
-            self.game_notes = []
+        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
+            self.session_game_results = []
     
     def get_session_win_rate(self) -> float:
         """Calculate session win rate."""
@@ -414,6 +454,12 @@ class SessionStats:
         self.last_result_time = datetime.now()
         # Reset paused time counter for last result tracking
         self.paused_time_since_last_result = 0.0
+        
+        # Track all session game results
+        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
+            self.session_game_results = []
+        self.session_game_results.append('W')
+        # Keep ALL results for the session (don't limit to 10)
     
     def add_loss(self):
         """Add a loss to session and update streaks."""
@@ -425,6 +471,12 @@ class SessionStats:
         self.last_result_time = datetime.now()
         # Reset paused time counter for last result tracking
         self.paused_time_since_last_result = 0.0
+        
+        # Track all session game results
+        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
+            self.session_game_results = []
+        self.session_game_results.append('L')
+        # Keep ALL results for the session (don't limit to 10)
     
     def complete_current_session(self, current_rank: ManualRank, current_format: FormatType):
         """Complete the current session and add it to history."""
@@ -620,6 +672,8 @@ class SessionStats:
         # Reset last result tracking
         self.last_result_time = None
         self.paused_time_since_last_result = 0.0
+        # Reset L10 game results for new session
+        self.session_game_results = []
 
 @dataclass
 class AppData:
@@ -729,6 +783,7 @@ class StateManager:
             
             # Convert datetime strings back to objects
             self._deserialize_datetimes(data)
+            self._deserialize_enums(data)
             
             # Migrate old format values to new BO1/BO3 system
             self._migrate_format_values(data)
@@ -786,6 +841,7 @@ class StateManager:
             
             # Serialize datetime objects
             self._serialize_datetimes(data)
+            self._serialize_enums(data)
             
             with open(self.state_file, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
@@ -833,6 +889,22 @@ class StateManager:
         for key, value in data.items():
             data[key] = convert_datetime(value)
     
+    def _serialize_enums(self, data: dict):
+        """Convert enum objects to string values for JSON serialization."""
+        def convert_enum(obj):
+            if isinstance(obj, dict):
+                return {k: convert_enum(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_enum(item) for item in obj]
+            elif hasattr(obj, 'value'):  # It's an enum
+                return obj.value
+            else:
+                return obj
+        
+        # Update the data in place
+        for key, value in data.items():
+            data[key] = convert_enum(value)
+    
     def _deserialize_datetimes(self, data: dict):
         """Convert ISO strings back to datetime objects."""
         datetime_fields = [
@@ -856,6 +928,22 @@ class StateManager:
         
         for key, value in data.items():
             data[key] = convert_iso_string(value, key)
+    
+    def _deserialize_enums(self, data: dict):
+        """Convert string values back to enum objects."""
+        # Handle session_goal_tier
+        if 'session_goal_tier' in data and isinstance(data['session_goal_tier'], str):
+            try:
+                data['session_goal_tier'] = RankTier(data['session_goal_tier'])
+            except (ValueError, TypeError):
+                data['session_goal_tier'] = None
+        
+        # Handle current_format 
+        if 'current_format' in data and isinstance(data['current_format'], str):
+            try:
+                data['current_format'] = FormatType(data['current_format'])
+            except (ValueError, TypeError):
+                data['current_format'] = FormatType.CONSTRUCTED_BO1
     
     def _migrate_format_values(self, data):
         """Migrate old format enum values to new BO1/BO3 system."""
@@ -1397,11 +1485,25 @@ class StatsPanel(Static):
             avg_secs = avg_seconds % 60
             avg_game_text = f"Avg Game: [{avg_minutes:02d}m {avg_secs:02d}s]  "
         
-        return Static(f"""📊 CURRENT SESSION [{format_name}]
-Started:  [{start_time}]  Duration: {duration_text}{pause_status}
-Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.1f}%
-Streaks:  W{current_streak_text} (current)
-{avg_game_text}Last: {last_result_text}{game_timer_text}""", classes="session-section", id="session-section")
+        # Generate L10 display (last 10 games)
+        l10_display = ""
+        if hasattr(stats, 'session_game_results') and stats.session_game_results:
+            # Show last 10 games with emojis
+            recent_games = stats.session_game_results[-10:]  # Get last 10
+            game_emojis = []
+            for result in recent_games:
+                if result == 'W':
+                    game_emojis.append('🟢')  # Green circle for win
+                elif result == 'L':
+                    game_emojis.append('🔴')  # Red circle for loss
+                else:
+                    game_emojis.append('⚪')  # White circle for unknown
+            l10_display = f"L10: {''.join(game_emojis)}"
+        else:
+            l10_display = "L10: No games yet"
+
+        session_content = self._generate_session_content()
+        return Static(session_content, classes="session-section", id="session-section")
     
     def _create_season_section(self) -> Static:
         """Create season total stats."""
@@ -1420,57 +1522,18 @@ Streaks:  W{current_streak_text} (current)
                 start_rank = str(stats.season_start_rank)
         
         return Static(f"""🏆 SEASON TOTAL [{format_name}]
-Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {stats.get_season_win_rate():.1f}%
-Best:     [W{stats.best_win_streak}]  Worst: [L{stats.worst_loss_streak}]
-Started:  [{start_rank}]""", classes="season-section")
+Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {stats.get_season_win_rate():.1f}%""", classes="season-section")
     
     def _create_history_section(self) -> Static:
-        """Create session history section."""
+        """Create recent game notes section."""
         stats = self.app_data.stats
-        today = datetime.now().strftime("%Y-%m-%d")
         
-        # Show last 5 completed sessions
-        history_lines = ["📈 SESSION HISTORY"]
+        # Dedicated notes section
+        notes_lines = ["📝 RECENT NOTES"]
         
-        if stats.session_history:
-            for i, session in enumerate(reversed(stats.session_history[-5:])):
-                # Format date display
-                if session.date == today:
-                    date_display = "Today"
-                else:
-                    try:
-                        session_date = datetime.strptime(session.date, "%Y-%m-%d")
-                        date_display = session_date.strftime("%m/%d")
-                    except:
-                        date_display = session.date[-5:]  # Last 5 chars (MM-DD)
-                
-                # Calculate win rate
-                total_games = session.wins + session.losses
-                win_rate = (session.wins / total_games * 100) if total_games > 0 else 0
-                
-                # Format bar progress
-                bar_text = f"{session.bar_progress:+d} bars" if session.bar_progress != 0 else "±0 bars"
-                
-                history_lines.append(f"{date_display:<9} {session.wins}W-{session.losses}L ({win_rate:.1f}%) {bar_text}")
-        else:
-            history_lines.append("No completed sessions yet")
-        
-        # Add current session if active
-        if stats.session_wins > 0 or stats.session_losses > 0:
-            current_rank = self.app_data.get_current_rank()
-            session_bars = self._calculate_session_bar_progress(stats, current_rank)
-            bar_text = f"{session_bars:+d} bars" if session_bars != 0 else "±0 bars"
-            
-            history_lines.append("─" * 35)
-            history_lines.append(f"Current:  {stats.session_wins}W-{stats.session_losses}L ({stats.get_session_win_rate():.1f}%) {bar_text}")
-        
-        # Add recent game notes section
         if hasattr(stats, 'game_notes') and stats.game_notes:
-            history_lines.append("")
-            history_lines.append("📝 RECENT NOTES")
-            
-            # Show last 3 notes
-            recent_notes = stats.game_notes[-3:] if len(stats.game_notes) > 3 else stats.game_notes
+            # Show last 6 notes (more space now) - most recent first
+            recent_notes = stats.game_notes[-6:] if len(stats.game_notes) > 6 else stats.game_notes
             for note in reversed(recent_notes):
                 # Handle timestamp safely with smart date/time display
                 if 'timestamp' in note and isinstance(note['timestamp'], datetime):
@@ -1485,20 +1548,138 @@ Started:  [{start_rank}]""", classes="season-section")
                 else:
                     time_str = "??:??"
                 
-                # Create summary line
+                # Create summary line with note text inline
                 result_icon = "🏆" if note.get('result') == 'Win' else "💀" if note.get('result') == 'Loss' else "❓"
                 summary = f"[{time_str}] {result_icon} {note['play_draw']}"
                 if note['opponent_deck']:
-                    summary += f" vs {note['opponent_deck'][:12]}"  # Truncate long names
+                    summary += f" vs {note['opponent_deck'][:15]}"  # More space for deck names
                 
-                history_lines.append(summary)
-                
-                # Add notes preview if available
+                # Add notes preview on same line if available
                 if note['notes']:
-                    preview = note['notes'][:30] + "..." if len(note['notes']) > 30 else note['notes']
-                    history_lines.append(f"  {preview}")
+                    preview = note['notes'][:25] + "..." if len(note['notes']) > 25 else note['notes']
+                    summary += f" - {preview}"
+                
+                notes_lines.append(summary)
+        else:
+            notes_lines.append("No game notes yet")
+            notes_lines.append("")
+            notes_lines.append("[N] Add your first note!")
+            notes_lines.append("")
+            notes_lines.append("Track matchups, strategies, and")
+            notes_lines.append("key moments from your games.")
         
-        return Static("\n".join(history_lines), classes="history-section")
+        return Static("\n".join(notes_lines), classes="history-section")
+    
+    def _generate_session_content(self) -> str:
+        """Generate session content string - single source of truth for session display."""
+        stats = self.app_data.stats
+        format_name = self.app_data.current_format.value.upper()
+        
+        # Session timing (active time only)
+        duration_text = "00m 00s"
+        pause_status = ""
+        if stats.session_start_time:
+            duration = stats.get_active_session_duration()
+            total_seconds = int(duration.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            if hours > 0:
+                duration_text = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
+            elif minutes > 0:
+                duration_text = f"{minutes:02d}m {seconds:02d}s"
+            else:
+                duration_text = f"00m {seconds:02d}s"
+            
+            # Add pause indicator
+            if stats.session_paused:
+                pause_status = " ⏸️ PAUSED"
+        
+        # Format start time safely
+        start_time = "Not set"
+        if stats.session_start_time:
+            try:
+                if isinstance(stats.session_start_time, str):
+                    session_start = datetime.fromisoformat(stats.session_start_time)
+                else:
+                    session_start = stats.session_start_time
+                start_time = session_start.strftime("%I:%M %p")
+            except:
+                start_time = "Invalid time"
+        
+        # Current streak info - show only the active streak
+        if stats.current_win_streak > 0:
+            wins = stats.current_win_streak
+            current_streak_text = f"{wins} Win" if wins == 1 else f"{wins} Wins"
+        elif stats.current_loss_streak > 0:
+            losses = stats.current_loss_streak
+            current_streak_text = f"{losses} Loss" if losses == 1 else f"{losses} Losses"
+        else:
+            current_streak_text = "New session"
+        
+        # Time since last result - show both real and active time
+        last_result_text = "No games yet"
+        if stats.last_result_time:
+            try:
+                real_seconds, active_seconds = stats.get_time_since_last_result()
+                
+                # Format real time
+                real_minutes = real_seconds // 60
+                real_secs = real_seconds % 60
+                real_text = f"{real_minutes:02d}m {real_secs:02d}s"
+                
+                # Format active time 
+                active_minutes = active_seconds // 60
+                active_secs = active_seconds % 60
+                active_text = f"{active_minutes:02d}m {active_secs:02d}s"
+                
+                # Show both if different, otherwise just one
+                if real_seconds != active_seconds:
+                    last_result_text = f"{real_text} ago ({active_text} active)"
+                else:
+                    last_result_text = f"{real_text} ago"
+                    
+            except:
+                last_result_text = "Invalid time"
+        
+        # Game timer info
+        game_timer_text = ""
+        avg_game_text = ""
+        if stats.game_start_time:
+            game_seconds = int(stats.get_current_game_duration())
+            game_minutes = game_seconds // 60
+            game_secs = game_seconds % 60
+            game_timer_text = f"  Current: {game_minutes:02d}m {game_secs:02d}s ⏰"
+        
+        if stats.game_durations:
+            avg_seconds = int(stats.get_average_game_duration())
+            avg_minutes = avg_seconds // 60
+            avg_secs = avg_seconds % 60
+            avg_game_text = f"Avg Game: [{avg_minutes:02d}m {avg_secs:02d}s]  "
+        
+        # Generate L10 display (last 10 games)
+        l10_display = ""
+        if hasattr(stats, 'session_game_results') and stats.session_game_results:
+            # Show last 10 games with emojis
+            recent_games = stats.session_game_results[-10:]  # Get last 10
+            game_emojis = []
+            for result in recent_games:
+                if result == 'W':
+                    game_emojis.append('🟢')  # Green circle for win
+                elif result == 'L':
+                    game_emojis.append('🔴')  # Red circle for loss
+                else:
+                    game_emojis.append('⚪')  # White circle for unknown
+            l10_display = f"L10: {''.join(game_emojis)}"
+        else:
+            l10_display = "L10: No games yet"
+        
+        return f"""📊 CURRENT SESSION [{format_name}]
+Started:  [{start_time}]  Duration: {duration_text}{pause_status}
+Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.1f}%
+{l10_display}
+Streak:   {current_streak_text}
+{avg_game_text}Last: {last_result_text}{game_timer_text}"""
     
     def _calculate_session_bar_progress(self, stats: SessionStats, current_rank: ManualRank) -> int:
         """Calculate how many bars gained/lost this session."""
@@ -1516,6 +1697,15 @@ Started:  [{start_rank}]""", classes="season-section")
         
         # Progress = reduction in bars remaining (higher rank = fewer bars remaining)
         return start_bars - current_bars
+    
+    def refresh_session_section(self) -> None:
+        """Refresh the session section with updated timer data."""
+        try:
+            session_section = self.query_one("#session-section", Static)
+            session_content = self._generate_session_content()
+            session_section.update(session_content)
+        except:
+            pass  # Ignore if section not found
 
 class EditStatsModal(ModalScreen):
     """Modal dialog for editing session/season stats."""
@@ -2004,6 +2194,32 @@ class ConfirmationModal(ModalScreen):
         Binding("escape", "cancel", "Cancel"),
     ]
     
+    CSS = """
+    ConfirmationModal {
+        align: center middle;
+    }
+    
+    .confirmation-modal-container {
+        width: 60;
+        height: 18;
+        border: thick $primary;
+        background: $surface;
+        padding: 2;
+    }
+    
+    .confirmation-modal-message {
+        height: 6;
+        content-align: center middle;
+        margin-bottom: 2;
+    }
+    
+    .confirmation-modal-buttons {
+        height: 3;
+        content-align: center middle;
+        margin-top: 1;
+    }
+    """
+    
     def __init__(self, message: str, **kwargs):
         super().__init__(**kwargs)
         self.message = message
@@ -2065,6 +2281,7 @@ class NotesManagerModal(ModalScreen):
         super().__init__(**kwargs)
         self.notes_list = notes_list
         self.selected_note_id = None
+        self.has_changes = False
     
     def compose(self) -> ComposeResult:
         with Container(id="notes-manager-dialog"):
@@ -2105,12 +2322,15 @@ class NotesManagerModal(ModalScreen):
             yield table
             
             with Horizontal(classes="manager-buttons"):
+                yield Button("Add Note", id="add-btn", variant="success")
                 yield Button("Edit Selected", id="edit-btn", variant="primary")
                 yield Button("Delete Selected", id="delete-btn", variant="error")
                 yield Button("Close", id="close-btn", variant="default")
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "edit-btn":
+        if event.button.id == "add-btn":
+            self.action_add_note()
+        elif event.button.id == "edit-btn":
             self.action_edit_selected()
         elif event.button.id == "delete-btn":
             self.action_delete_selected()
@@ -2208,6 +2428,9 @@ class NotesManagerModal(ModalScreen):
                     # Refresh the table display
                     self._refresh_table()
                     self.app.notify("Note deleted successfully!", severity="success")
+                    
+                    # Signal that notes were modified
+                    self.has_changes = True
             
             self.app.push_screen(confirm_modal, handle_confirmation)
     
@@ -2243,9 +2466,29 @@ class NotesManagerModal(ModalScreen):
                 key=str(note['id'])
             )
     
+    def action_add_note(self) -> None:
+        """Add a new note."""
+        notes_modal = GameNotesModal()
+        
+        def handle_note_result(note_data):
+            if note_data:
+                # Add the new note to our list
+                self.notes_list.append(note_data)
+                # Refresh the table display
+                self._refresh_table()
+                self.app.notify("Note added successfully!", severity="success")
+                
+                # Signal that notes were modified
+                self.has_changes = True
+        
+        self.app.push_screen(notes_modal, handle_note_result)
+    
     def action_cancel(self) -> None:
         """Cancel and close modal."""
-        self.dismiss(None)
+        if self.has_changes:
+            self.dismiss("deleted")  # Signal that changes were made
+        else:
+            self.dismiss(None)
 
 class GameNotesModal(ModalScreen):
     """Modal dialog for adding detailed game notes."""
@@ -2625,107 +2868,35 @@ class ManualTUIApp(App):
         try:
             top_panel = self.query_one(TopPanel)
             top_panel.update_display()
-        except:
-            pass  # Ignore if not found during startup
+        except Exception as e:
+            # DEBUG: Log top panel update errors
+            self.notify(f"Top panel update error: {e}", severity="error")
         
         # Update timer-based elements in stats panel
         try:
             self._update_session_timers()
-        except:
-            pass  # Ignore if not found during startup
+        except Exception as e:
+            # DEBUG: Log timer update errors
+            self.notify(f"Timer update error: {e}", severity="error")
         
         # Save state periodically
-        self.state_manager.save_state(self.app_data)
+        try:
+            self.state_manager.save_state(self.app_data)
+        except Exception as e:
+            # DEBUG: Log save errors
+            self.notify(f"Save error: {e}", severity="error")
     
     def _update_session_timers(self) -> None:
         """Update session duration and last result timers."""
         try:
-            # Find session section and update it
-            session_section = self.query_one("#session-section", Static)
-            stats = self.app_data.stats
-            format_name = self.app_data.current_format.value.upper()
-            
-            # Session timing (active time only)
-            duration_text = "00m 00s"
-            pause_status = ""
-            if stats.session_start_time:
-                duration = stats.get_active_session_duration()
-                total_seconds = int(duration.total_seconds())
-                hours = total_seconds // 3600
-                minutes = (total_seconds % 3600) // 60
-                seconds = total_seconds % 60
-                if hours > 0:
-                    duration_text = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
-                elif minutes > 0:
-                    duration_text = f"{minutes:02d}m {seconds:02d}s"
-                else:
-                    duration_text = f"00m {seconds:02d}s"
-                
-                # Add pause indicator
-                if stats.session_paused:
-                    pause_status = " ⏸️ PAUSED"
-            
-            
-            # Format start time safely
-            start_time = "Not set"
-            if stats.session_start_time:
-                try:
-                    if isinstance(stats.session_start_time, str):
-                        session_start = datetime.fromisoformat(stats.session_start_time)
-                    else:
-                        session_start = stats.session_start_time
-                    start_time = session_start.strftime("%I:%M %p")
-                except:
-                    start_time = "Invalid time"
-            
-            # Streak info
-            current_streak_text = f"{stats.current_win_streak} / L{stats.current_loss_streak}"
-            
-            # Time since last result - show both real and active time
-            last_result_text = "No games yet"
-            if stats.last_result_time:
-                real_seconds, active_seconds = stats.get_time_since_last_result()
-                
-                # Format real time
-                real_minutes = real_seconds // 60
-                real_secs = real_seconds % 60
-                real_text = f"{real_minutes:02d}m {real_secs:02d}s"
-                
-                # Format active time 
-                active_minutes = active_seconds // 60
-                active_secs = active_seconds % 60
-                active_text = f"{active_minutes:02d}m {active_secs:02d}s"
-                
-                # Show both if different, otherwise just one
-                if real_seconds != active_seconds:
-                    last_result_text = f"{real_text} ago ({active_text} active)"
-                else:
-                    last_result_text = f"{real_text} ago"
-            
-            # Game timer info
-            game_timer_text = ""
-            avg_game_text = ""
-            if stats.game_start_time:
-                game_seconds = int(stats.get_current_game_duration())
-                game_minutes = game_seconds // 60
-                game_secs = game_seconds % 60
-                game_timer_text = f"  Current: {game_minutes:02d}m {game_secs:02d}s ⏰"
-            
-            if stats.game_durations:
-                avg_seconds = int(stats.get_average_game_duration())
-                avg_minutes = avg_seconds // 60
-                avg_secs = avg_seconds % 60
-                avg_game_text = f"Avg Game: [{avg_minutes:02d}m {avg_secs:02d}s]  "
-            
-            session_content = f"""📊 CURRENT SESSION [{format_name}]
-Started:  [{start_time}]  Duration: {duration_text}{pause_status}
-Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.1f}%
-Streaks:  W{current_streak_text} (current)
-{avg_game_text}Last: {last_result_text}{game_timer_text}"""
-            
-            session_section.update(session_content)
-        except:
-            pass  # Ignore if section not found
+            # Find stats panel and tell it to refresh its session section
+            stats_panel = self.query_one(StatsPanel)
+            stats_panel.refresh_session_section()
+            # DEBUG: Confirm timer is running
+            # self.notify("Timer tick", timeout=0.5)  # Uncomment to see if timer runs
+        except Exception as e:
+            # DEBUG: Log specific timer errors
+            self.notify(f"Session timer error: {e}", severity="error")
     
     def _is_goal_attained(self, current_rank: ManualRank, goal_tier, goal_division) -> bool:
         """Check if the session goal has been attained."""
@@ -2768,7 +2939,12 @@ Streaks:  W{current_streak_text} (current)
             is_goal_achieved_now = self._is_goal_attained(new_rank, stats.session_goal_tier, stats.session_goal_division)
             if is_goal_achieved_now:
                 # Goal just achieved!
-                goal_name = "Mythic" if stats.session_goal_tier == RankTier.MYTHIC else f"{stats.session_goal_tier.value} {stats.session_goal_division}"
+                # Handle both enum and string cases for session_goal_tier
+                if stats.session_goal_tier == RankTier.MYTHIC or str(stats.session_goal_tier) == "Mythic":
+                    goal_name = "Mythic"
+                else:
+                    tier_name = stats.session_goal_tier.value if hasattr(stats.session_goal_tier, 'value') else str(stats.session_goal_tier)
+                    goal_name = f"{tier_name} {stats.session_goal_division}"
                 self.notify(f"🎉 SESSION GOAL ACHIEVED: {goal_name}! 🎉", severity="success")
         
         # Check for milestones after win
@@ -2893,11 +3069,11 @@ Streaks:  W{current_streak_text} (current)
     
     def action_view_all_notes(self) -> None:
         """View and edit all game notes."""
-        if not hasattr(self.app_data.stats, 'game_notes') or not self.app_data.stats.game_notes:
-            self.notify("No game notes found!", severity="warning")
-            return
+        # Initialize game_notes if it doesn't exist
+        if not hasattr(self.app_data.stats, 'game_notes'):
+            self.app_data.stats.game_notes = []
         
-        # Create the notes manager modal
+        # Always show the notes manager, even if empty
         manager_modal = NotesManagerModal(self.app_data.stats.game_notes)
         
         def handle_manager_result(result):
@@ -3028,6 +3204,9 @@ Streaks:  W{current_streak_text} (current)
         # 4. WIN RATE MILESTONES
         self._check_winrate_milestones(stats)
         
+        # 5. L10 PERFECT GAMES MILESTONE
+        self._check_l10_perfect_games(stats)
+        
         # Update milestone tracking
         stats.last_session_win_rate = stats.get_session_win_rate()
         stats.last_season_win_rate = stats.get_season_win_rate()
@@ -3100,6 +3279,24 @@ Streaks:  W{current_streak_text} (current)
                         self.notify(f"📊 SEASON {threshold:.0f}%+ WIN RATE! Positive record! 📊", severity="success")
                     break
     
+    def _check_l10_perfect_games(self, stats: SessionStats) -> None:
+        """Check for L10 perfect games (10 wins in a row) milestone."""
+        if hasattr(stats, 'session_game_results') and stats.session_game_results:
+            # Check if we have at least 10 games and the last 10 are all wins
+            if len(stats.session_game_results) >= 10:
+                last_10 = stats.session_game_results[-10:]
+                if all(result == 'W' for result in last_10):
+                    # Check if this is a new achievement (weren't perfect before this win)
+                    if len(stats.session_game_results) > 10:
+                        # Look at the 11th-to-last game to see if this is newly perfect
+                        previous_11th = stats.session_game_results[-11]
+                        if previous_11th == 'L':
+                            # This is a new perfect 10! Celebrate!
+                            self.notify("🌟 PERFECT L10! TEN WINS IN A ROW! UNSTOPPABLE! 🌟", severity="success")
+                    else:
+                        # Exactly 10 games and all wins - first time perfect!
+                        self.notify("🌟 PERFECT L10! TEN WINS IN A ROW! UNSTOPPABLE! 🌟", severity="success")
+    
     def action_start_game(self) -> None:
         """Start a new game timer."""
         stats = self.app_data.stats
@@ -3168,7 +3365,12 @@ Press any key to close this help."""
                     is_goal_achieved_now = self._is_goal_attained(result, stats.session_goal_tier, stats.session_goal_division)
                     if is_goal_achieved_now:
                         # Goal just achieved!
-                        goal_name = "Mythic" if stats.session_goal_tier == RankTier.MYTHIC else f"{stats.session_goal_tier.value} {stats.session_goal_division}"
+                        # Handle both enum and string cases for session_goal_tier
+                        if stats.session_goal_tier == RankTier.MYTHIC or str(stats.session_goal_tier) == "Mythic":
+                            goal_name = "Mythic"
+                        else:
+                            tier_name = stats.session_goal_tier.value if hasattr(stats.session_goal_tier, 'value') else str(stats.session_goal_tier)
+                            goal_name = f"{tier_name} {stats.session_goal_division}"
                         self.notify(f"🎉 SESSION GOAL ACHIEVED: {goal_name}! 🎉", severity="success")
                 
                 self.refresh_panels()
