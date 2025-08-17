@@ -22,940 +22,16 @@ from textual.reactive import reactive
 from textual.binding import Binding
 from textual.message import Message
 
-# === MODELS ===
+# Import models from our new modules
+from models import FormatType, RankTier, ManualRank, CompletedSession, SessionStats, AppData
+from storage import StateManager
 
-class FormatType(str, Enum):
-    """MTG Arena format types."""
-    CONSTRUCTED_BO1 = "Constructed BO1"
-    CONSTRUCTED_BO3 = "Constructed BO3" 
-    LIMITED = "Limited"
+# === MODELS === (NOW IMPORTED FROM models/ PACKAGE)
+# Previously contained duplicate FormatType, RankTier, ManualRank, SessionStats, AppData classes
+# All model classes have been moved to models/ package and imported at top of file
 
-class RankTier(str, Enum):
-    """MTG Arena rank tiers."""
-    BRONZE = "Bronze"
-    SILVER = "Silver"
-    GOLD = "Gold"  
-    PLATINUM = "Platinum"
-    DIAMOND = "Diamond"
-    MYTHIC = "Mythic"
-
-@dataclass
-class ManualRank:
-    """Represents a player's rank in MTG Arena - standalone version."""
-    tier: RankTier
-    division: Optional[int] = None  # 1-4 for non-Mythic, None for Mythic
-    pips: int = 0  # Current pips in division
-    mythic_percentage: Optional[float] = None  # For Mythic only
-    mythic_rank: Optional[int] = None  # Mythic rank number (#1234)
-    format_type: FormatType = FormatType.CONSTRUCTED_BO1
-    
-    @property
-    def max_pips(self) -> int:
-        """Get max pips per division based on format."""
-        if self.format_type in [FormatType.CONSTRUCTED_BO1, FormatType.CONSTRUCTED_BO3]:
-            return 6
-        else:  # LIMITED
-            return 4
-    
-    def is_mythic(self) -> bool:
-        """Check if rank is Mythic tier."""
-        return self.tier == RankTier.MYTHIC
-        
-    def get_total_bars_remaining_to_mythic(self) -> int:
-        """Calculate total bars needed to reach Mythic."""
-        if self.is_mythic():
-            return 0
-            
-        # Bars remaining in current division
-        bars_in_current = self.max_pips - self.pips
-        
-        # Bars in divisions above current (within tier)
-        bars_in_tier = 0
-        if self.division and self.division > 1:
-            bars_in_tier = (self.division - 1) * self.max_pips
-            
-        # Bars in tiers above current
-        tier_order = list(RankTier)[:-1]  # Exclude Mythic
-        current_tier_idx = tier_order.index(self.tier)
-        bars_in_higher_tiers = 0
-        
-        for tier_idx in range(current_tier_idx + 1, len(tier_order)):
-            bars_in_higher_tiers += 4 * self.max_pips  # 4 divisions per tier
-            
-        return bars_in_current + bars_in_tier + bars_in_higher_tiers
-    
-    def set_to_position(self, tier: RankTier, division: Optional[int], pips: int) -> 'ManualRank':
-        """Set rank to specific position - returns new rank instance."""
-        if tier == RankTier.MYTHIC:
-            return ManualRank(
-                tier=RankTier.MYTHIC,
-                mythic_percentage=self.mythic_percentage or 50.0,
-                mythic_rank=self.mythic_rank,
-                format_type=self.format_type
-            )
-        else:
-            return ManualRank(
-                tier=tier,
-                division=division,
-                pips=pips,
-                format_type=self.format_type
-            )
-    
-    def add_win(self) -> 'ManualRank':
-        """Add a win (pips based on tier and format)."""
-        if self.is_mythic():
-            return self  # Mythic doesn't change pips
-            
-        # Determine pips gained per win based on tier and format
-        if self.format_type == FormatType.CONSTRUCTED_BO3:
-            # BO3 is double the pips of BO1
-            if self.tier in [RankTier.BRONZE, RankTier.SILVER]:
-                pips_gained = 4  # Double of 2
-            elif self.tier == RankTier.GOLD:
-                pips_gained = 4  # Double of 2
-            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
-                pips_gained = 2  # Double of 1
-            else:
-                pips_gained = 2
-        else:
-            # BO1 or Limited - standard progression
-            if self.tier in [RankTier.BRONZE, RankTier.SILVER]:
-                pips_gained = 2
-            elif self.tier == RankTier.GOLD:
-                pips_gained = 2  
-            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
-                pips_gained = 1
-            else:
-                pips_gained = 1
-            
-        new_pips = self.pips + pips_gained
-        new_division = self.division
-        new_tier = self.tier
-        
-        # Handle promotion within tier
-        while new_pips >= self.max_pips and new_division and new_division > 1:
-            new_pips -= self.max_pips
-            new_division -= 1
-        
-        # Handle tier promotion
-        if new_pips >= self.max_pips and new_division == 1:
-            tier_order = list(RankTier)
-            current_index = tier_order.index(self.tier)
-            if current_index < len(tier_order) - 1:
-                new_tier = tier_order[current_index + 1]
-                if new_tier == RankTier.MYTHIC:
-                    return ManualRank(
-                        tier=RankTier.MYTHIC,
-                        mythic_percentage=95.0,
-                        format_type=self.format_type
-                    )
-                else:
-                    new_division = 4
-                    new_pips = new_pips - self.max_pips  # Carry over extra pips
-        
-        return ManualRank(
-            tier=new_tier,
-            division=new_division,
-            pips=min(new_pips, self.max_pips),
-            format_type=self.format_type
-        )
-    
-    def add_loss(self) -> 'ManualRank':
-        """Add a loss (pips lost based on tier)."""
-        if self.is_mythic():
-            return self  # Mythic doesn't lose pips
-            
-        # Bronze/Silver can't lose pips at all
-        if self.tier in [RankTier.BRONZE, RankTier.SILVER]:
-            return self
-            
-        # Determine pips lost per loss based on format
-        if self.format_type == FormatType.CONSTRUCTED_BO3:
-            pips_lost = 2  # Double pip loss for BO3
-        else:
-            pips_lost = 1  # Standard pip loss for BO1/Limited
-            
-        new_pips = self.pips - pips_lost
-        new_division = self.division
-        new_tier = self.tier
-        
-        # Handle demotion if we go below 0 pips
-        if new_pips < 0 and new_division and new_division < 4:
-            # Move to next division down (higher number)
-            new_division += 1
-            new_pips = self.max_pips - 1
-        elif new_pips < 0 and new_division == 4:
-            # At bottom of tier, all tiers have tier floor protection
-            if self.tier in [RankTier.BRONZE, RankTier.SILVER, RankTier.GOLD, RankTier.PLATINUM, RankTier.DIAMOND]:
-                # All tiers have tier floor - can't drop to previous tier
-                new_pips = 0
-            else:
-                # This shouldn't happen with current tier system
-                new_pips = 0
-        elif new_pips < 0:
-            # Safety check
-            new_pips = 0
-        
-        return ManualRank(
-            tier=new_tier,
-            division=new_division,
-            pips=new_pips,
-            format_type=self.format_type
-        )
-    
-    def get_bars_per_win(self) -> int:
-        """Get the number of bars (pips) gained per win for this rank and format."""
-        if self.format_type == FormatType.CONSTRUCTED_BO3:
-            # BO3 is double the pips of BO1
-            if self.tier in [RankTier.BRONZE, RankTier.SILVER, RankTier.GOLD]:
-                return 4  # Double of 2
-            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
-                return 2  # Double of 1
-            else:
-                return 2
-        else:
-            # BO1 or Limited - standard progression
-            if self.tier in [RankTier.BRONZE, RankTier.SILVER, RankTier.GOLD]:
-                return 2
-            elif self.tier in [RankTier.PLATINUM, RankTier.DIAMOND]:
-                return 1
-            else:
-                return 1
-    
-    def is_boss_fight(self) -> bool:
-        """Check if the next win would promote to the next tier (boss fight!)."""
-        if self.is_mythic():
-            return False  # Already at highest tier
-        
-        if self.division != 1:
-            return False  # Must be in Division 1 to be close to tier promotion
-        
-        # Determine bars gained per win based on tier
-        bars_per_win = self.get_bars_per_win()
-        
-        # Boss fight: when pips + bars_per_win >= max_pips (would promote to next tier)
-        return self.pips + bars_per_win >= self.max_pips
-    
-    def next_tier(self) -> Optional[str]:
-        """Get the name of the next tier for promotion."""
-        if self.is_mythic():
-            return None
-        
-        tier_order = list(RankTier)
-        current_index = tier_order.index(self.tier)
-        if current_index < len(tier_order) - 1:
-            next_tier_enum = tier_order[current_index + 1]
-            return next_tier_enum.value if hasattr(next_tier_enum, 'value') else str(next_tier_enum)
-        return None
-    
-    def __str__(self) -> str:
-        """String representation of rank."""
-        if self.is_mythic():
-            if self.mythic_rank:
-                return f"Mythic #{self.mythic_rank}"
-            return f"Mythic {self.mythic_percentage:.1f}%" if self.mythic_percentage else "Mythic"
-        tier_name = self.tier.value if hasattr(self.tier, 'value') else self.tier
-        return f"{tier_name} {self.division} ({self.pips}/{self.max_pips})"
-
-@dataclass
-class CompletedSession:
-    """A completed session record."""
-    date: str  # YYYY-MM-DD format
-    wins: int
-    losses: int
-    start_time: datetime
-    end_time: datetime
-    start_rank: Optional[ManualRank] = None
-    end_rank: Optional[ManualRank] = None
-    format_type: FormatType = FormatType.CONSTRUCTED_BO1
-    bar_progress: int = 0  # Net bars gained/lost
-
-@dataclass
-class FormatStats:
-    """Statistics for a specific format (Constructed BO1/BO3/Limited)."""
-    # Current session
-    session_wins: int = 0
-    session_losses: int = 0
-    session_start_time: Optional[datetime] = None
-    session_start_rank: Optional[ManualRank] = None
-    last_result_time: Optional[datetime] = None
-    session_goal_tier: Optional[RankTier] = None
-    session_goal_division: Optional[int] = None
-    
-    # Season totals
-    season_wins: int = 0
-    season_losses: int = 0
-    season_start_rank: Optional[ManualRank] = None
-    
-    # Streaks
-    current_win_streak: int = 0
-    current_loss_streak: int = 0
-    best_win_streak: int = 0
-    worst_loss_streak: int = 0
-    
-    # Session history (last 5 sessions)
-    session_history: List[CompletedSession] = None
-    
-    # Game notes for current session
-    game_notes: List[dict] = None
-    
-    # Session timer controls
-    session_paused: bool = False
-    total_paused_time: float = 0.0  # Total time paused in seconds
-    pause_start_time: Optional[datetime] = None
-    game_start_time: Optional[datetime] = None
-    game_paused_time: float = 0.0  # Total time paused during current game
-    game_durations: List[float] = None  # List of completed game durations in seconds
-    
-    # Milestone tracking (to detect when thresholds are crossed)
-    last_session_win_rate: float = 0.0
-    last_season_win_rate: float = 0.0
-    
-    # Paused time since last result (for active time calculation)
-    paused_time_since_last_result: float = 0.0
-    
-    def __post_init__(self):
-        if self.session_history is None:
-            self.session_history = []
-        if self.game_durations is None:
-            self.game_durations = []
-        if not hasattr(self, 'game_notes') or self.game_notes is None:
-            self.game_notes = []
-    
-    def get_session_win_rate(self) -> float:
-        """Calculate session win rate."""
-        total = self.session_wins + self.session_losses
-        if total == 0:
-            return 0.0
-        return (self.session_wins / total) * 100
-    
-    def get_season_win_rate(self) -> float:
-        """Calculate season win rate."""
-        total = self.season_wins + self.season_losses
-        if total == 0:
-            return 0.0
-        return (self.season_wins / total) * 100
-    
-    def add_win(self):
-        """Add a win to session and update streaks."""
-        self.session_wins += 1
-        self.season_wins += 1
-        self.current_win_streak += 1
-        self.current_loss_streak = 0
-        self.best_win_streak = max(self.best_win_streak, self.current_win_streak)
-        self.last_result_time = datetime.now()
-        # Reset paused time counter for last result tracking
-        self.paused_time_since_last_result = 0.0
-        
-        # Track all session game results
-        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
-            self.session_game_results = []
-        self.session_game_results.append('W')
-        # Keep ALL results for the session (don't limit to 10)
-    
-    def add_loss(self):
-        """Add a loss to session and update streaks."""
-        self.session_losses += 1
-        self.season_losses += 1
-        self.current_loss_streak += 1
-        self.current_win_streak = 0
-        self.worst_loss_streak = max(self.worst_loss_streak, self.current_loss_streak)
-        self.last_result_time = datetime.now()
-        # Reset paused time counter for last result tracking
-        self.paused_time_since_last_result = 0.0
-        
-        # Track all session game results
-        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
-            self.session_game_results = []
-        self.session_game_results.append('L')
-        # Keep ALL results for the session (don't limit to 10)
-
-@dataclass  
-class SessionStats:
-    """Session and season statistics."""
-    # Current session
-    session_wins: int = 0
-    session_losses: int = 0
-    session_start_time: Optional[datetime] = None
-    session_start_rank: Optional[ManualRank] = None
-    last_result_time: Optional[datetime] = None
-    session_goal_tier: Optional[RankTier] = None
-    session_goal_division: Optional[int] = None
-    
-    # Season totals
-    season_wins: int = 0
-    season_losses: int = 0
-    season_start_rank: Optional[ManualRank] = None
-    season_end_date: Optional[datetime] = None
-    
-    # Streaks
-    current_win_streak: int = 0
-    current_loss_streak: int = 0
-    best_win_streak: int = 0
-    worst_loss_streak: int = 0
-    
-    # Session history (last 5 sessions)
-    session_history: List[CompletedSession] = None
-    
-    # Game notes for current session
-    game_notes: List[dict] = None
-    
-    # Session game results (for L10 display)
-    session_game_results: List[str] = None
-    
-    # Session timer controls
-    session_paused: bool = False
-    total_paused_time: float = 0.0  # Total time paused in seconds
-    pause_start_time: Optional[datetime] = None
-    game_start_time: Optional[datetime] = None
-    game_paused_time: float = 0.0  # Total time paused during current game
-    game_durations: List[float] = None  # List of completed game durations in seconds
-    
-    # Milestone tracking (to detect when thresholds are crossed)
-    last_session_win_rate: float = 0.0
-    last_season_win_rate: float = 0.0
-    
-    # Paused time since last result (for active time calculation)
-    paused_time_since_last_result: float = 0.0
-    
-    def __post_init__(self):
-        """Initialize default values."""
-        if self.session_history is None:
-            self.session_history = []
-        if self.game_durations is None:
-            self.game_durations = []
-        if not hasattr(self, 'game_notes') or self.game_notes is None:
-            self.game_notes = []
-        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
-            self.session_game_results = []
-    
-    def get_session_win_rate(self) -> float:
-        """Calculate session win rate."""
-        total = self.session_wins + self.session_losses
-        if total == 0:
-            return 0.0
-        return (self.session_wins / total) * 100
-    
-    def get_season_win_rate(self) -> float:
-        """Calculate season win rate."""
-        total = self.season_wins + self.season_losses
-        if total == 0:
-            return 0.0
-        return (self.season_wins / total) * 100
-    
-    
-    def add_win(self):
-        """Add a win to session and update streaks."""
-        self.session_wins += 1
-        self.season_wins += 1
-        self.current_win_streak += 1
-        self.current_loss_streak = 0
-        self.best_win_streak = max(self.best_win_streak, self.current_win_streak)
-        self.last_result_time = datetime.now()
-        # Reset paused time counter for last result tracking
-        self.paused_time_since_last_result = 0.0
-        
-        # Track all session game results
-        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
-            self.session_game_results = []
-        self.session_game_results.append('W')
-        # Keep ALL results for the session (don't limit to 10)
-    
-    def add_loss(self):
-        """Add a loss to session and update streaks."""
-        self.session_losses += 1
-        self.season_losses += 1
-        self.current_loss_streak += 1
-        self.current_win_streak = 0
-        self.worst_loss_streak = max(self.worst_loss_streak, self.current_loss_streak)
-        self.last_result_time = datetime.now()
-        # Reset paused time counter for last result tracking
-        self.paused_time_since_last_result = 0.0
-        
-        # Track all session game results
-        if not hasattr(self, 'session_game_results') or self.session_game_results is None:
-            self.session_game_results = []
-        self.session_game_results.append('L')
-        # Keep ALL results for the session (don't limit to 10)
-    
-    def complete_current_session(self, current_rank: ManualRank, current_format: FormatType):
-        """Complete the current session and add it to history."""
-        if self.session_start_time and (self.session_wins > 0 or self.session_losses > 0):
-            # Calculate bar progress
-            bar_progress = self._calculate_bar_progress(self.session_start_rank, current_rank)
-            
-            # Create completed session record
-            completed = CompletedSession(
-                date=datetime.now().strftime("%Y-%m-%d"),
-                wins=self.session_wins,
-                losses=self.session_losses,
-                start_time=self.session_start_time,
-                end_time=datetime.now(),
-                start_rank=self.session_start_rank,
-                end_rank=current_rank,
-                format_type=current_format,
-                bar_progress=bar_progress
-            )
-            
-            # Add to history (keep only last 5)
-            self.session_history.append(completed)
-            if len(self.session_history) > 5:
-                self.session_history = self.session_history[-5:]
-    
-    def _calculate_bar_progress(self, start_rank: Optional[ManualRank], end_rank: ManualRank) -> int:
-        """Calculate net bar progress between two ranks."""
-        if not start_rank:
-            return 0
-        
-        # This is a simplified calculation - would need full rank-to-bars conversion
-        # For now, just estimate based on tier/division/pips differences
-        try:
-            start_total = self._rank_to_total_bars(start_rank)
-            end_total = self._rank_to_total_bars(end_rank)
-            return end_total - start_total
-        except:
-            return 0
-    
-    def _rank_to_total_bars(self, rank: ManualRank) -> int:
-        """Convert rank to total bars for comparison."""
-        tier_values = {"Bronze": 0, "Silver": 24, "Gold": 48, "Platinum": 72, "Diamond": 96, "Mythic": 120}
-        tier_name = rank.tier.value if hasattr(rank.tier, 'value') else str(rank.tier)
-        
-        if rank.is_mythic():
-            return 120
-        
-        base_bars = tier_values.get(tier_name, 0)
-        division_bars = (4 - rank.division) * 6  # Division 4=0 bars, 3=6 bars, 2=12 bars, 1=18 bars
-        pip_bars = rank.pips
-        
-        return base_bars + division_bars + pip_bars
-    
-    def start_game_timer(self):
-        """Start timing a new game."""
-        self.game_start_time = datetime.now()
-        self.game_paused_time = 0.0
-    
-    def end_game_timer(self) -> float:
-        """End the current game timer and return duration."""
-        if not self.game_start_time:
-            return 0.0
-        
-        # Calculate total game duration excluding pauses
-        total_elapsed = (datetime.now() - self.game_start_time).total_seconds()
-        game_duration = total_elapsed - self.game_paused_time
-        
-        # Record the duration
-        self.game_durations.append(max(0, game_duration))
-        
-        # Keep only last 50 games for average calculation
-        if len(self.game_durations) > 50:
-            self.game_durations = self.game_durations[-50:]
-        
-        # Reset game timer
-        self.game_start_time = None
-        self.game_paused_time = 0.0
-        
-        return game_duration
-    
-    def get_current_game_duration(self) -> float:
-        """Get current game duration in seconds."""
-        if not self.game_start_time:
-            return 0.0
-        
-        total_elapsed = (datetime.now() - self.game_start_time).total_seconds()
-        return max(0, total_elapsed - self.game_paused_time)
-    
-    def get_average_game_duration(self) -> float:
-        """Get average game duration in seconds."""
-        if not self.game_durations:
-            return 0.0
-        return sum(self.game_durations) / len(self.game_durations)
-    
-    def pause_session(self):
-        """Pause both session and game timers."""
-        if not self.session_paused and self.session_start_time:
-            self.session_paused = True
-            self.pause_start_time = datetime.now()
-    
-    def resume_session(self):
-        """Resume both session and game timers."""
-        if self.session_paused and self.pause_start_time:
-            # Calculate pause duration (handle string datetime conversion)
-            try:
-                if isinstance(self.pause_start_time, str):
-                    pause_start = datetime.fromisoformat(self.pause_start_time)
-                else:
-                    pause_start = self.pause_start_time
-                
-                pause_duration = (datetime.now() - pause_start).total_seconds()
-            except:
-                # If there's any issue with datetime conversion, just reset
-                pause_duration = 0.0
-            
-            # Add to session paused time
-            self.total_paused_time += pause_duration
-            
-            # Add to current game paused time if game is active
-            if self.game_start_time:
-                self.game_paused_time += pause_duration
-            
-            # Add to paused time since last result
-            self.paused_time_since_last_result += pause_duration
-            
-            self.session_paused = False
-            self.pause_start_time = None
-    
-    def get_active_session_duration(self) -> timedelta:
-        """Get session duration excluding paused time."""
-        if not self.session_start_time:
-            return timedelta(0)
-        
-        # Calculate total elapsed time
-        total_elapsed = datetime.now() - self.session_start_time
-        
-        # Subtract total paused time
-        current_pause_time = 0
-        if self.session_paused and self.pause_start_time:
-            try:
-                if isinstance(self.pause_start_time, str):
-                    pause_start = datetime.fromisoformat(self.pause_start_time)
-                else:
-                    pause_start = self.pause_start_time
-                current_pause_time = (datetime.now() - pause_start).total_seconds()
-            except:
-                current_pause_time = 0
-        
-        active_seconds = total_elapsed.total_seconds() - self.total_paused_time - current_pause_time
-        return timedelta(seconds=max(0, active_seconds))
-    
-    def get_time_since_last_result(self) -> Tuple[int, int]:
-        """Get time since last result as (real_seconds, active_seconds)."""
-        if not self.last_result_time:
-            return (0, 0)
-        
-        # Real time (wall clock)
-        real_elapsed = (datetime.now() - self.last_result_time).total_seconds()
-        
-        # Active time (excluding pauses)
-        current_pause_time = 0
-        if self.session_paused and self.pause_start_time:
-            try:
-                if isinstance(self.pause_start_time, str):
-                    pause_start = datetime.fromisoformat(self.pause_start_time)
-                else:
-                    pause_start = self.pause_start_time
-                current_pause_time = (datetime.now() - pause_start).total_seconds()
-            except:
-                current_pause_time = 0
-        
-        active_elapsed = real_elapsed - self.paused_time_since_last_result - current_pause_time
-        
-        return (int(real_elapsed), int(max(0, active_elapsed)))
-    
-    def reset_session(self, current_rank: Optional[ManualRank] = None):
-        """Reset session stats but keep season totals."""
-        self.session_wins = 0
-        self.session_losses = 0
-        self.session_start_time = datetime.now()
-        self.session_start_rank = current_rank
-        self.current_win_streak = 0
-        self.current_loss_streak = 0
-        # Reset timer controls
-        self.session_paused = False
-        self.total_paused_time = 0.0
-        self.pause_start_time = None
-        # Reset game timer (but keep duration history for averages)
-        self.game_start_time = None
-        self.game_paused_time = 0.0
-        # Reset milestone tracking
-        self.last_session_win_rate = 0.0
-        # Reset last result tracking
-        self.last_result_time = None
-        self.paused_time_since_last_result = 0.0
-        # Reset L10 game results for new session
-        self.session_game_results = []
-
-@dataclass
-class AppData:
-    """Complete application state."""
-    constructed_rank: ManualRank
-    limited_rank: ManualRank
-    current_format: FormatType
-    stats: SessionStats
-    show_mythic_progress: bool = True
-    collapsed_tiers: List[RankTier] = None
-    hidden_tiers: List[RankTier] = None
-    auto_collapse_mode: bool = False
-    auto_hide_mode: bool = False
-    
-    def __post_init__(self):
-        if self.collapsed_tiers is None:
-            self.collapsed_tiers = []
-        if self.hidden_tiers is None:
-            self.hidden_tiers = []
-    
-    def get_current_rank(self) -> ManualRank:
-        """Get rank for current format."""
-        if self.current_format in [FormatType.CONSTRUCTED_BO1, FormatType.CONSTRUCTED_BO3]:
-            return self.constructed_rank
-        else:
-            return self.limited_rank
-    
-    def set_current_rank(self, rank: ManualRank):
-        """Set rank for current format."""
-        if self.current_format in [FormatType.CONSTRUCTED_BO1, FormatType.CONSTRUCTED_BO3]:
-            self.constructed_rank = rank
-        else:
-            self.limited_rank = rank
-        
-        # Clean up hide/collapse states when rank changes
-        self._cleanup_tier_states(rank)
-    
-    def _cleanup_tier_states(self, current_rank: ManualRank):
-        """Clean up invalid hide/collapse states and auto-collapse/hide newly completed tiers."""
-        tier_order = list(RankTier)[:-1]  # Exclude Mythic
-        
-        if current_rank.is_mythic():
-            # At mythic, all non-mythic tiers are completed
-            # If we're in collapse/hide mode, apply to all completed tiers
-            if self.collapsed_tiers:
-                for tier in tier_order:
-                    if tier not in self.collapsed_tiers:
-                        self.collapsed_tiers.append(tier)
-            if self.hidden_tiers:
-                for tier in tier_order:
-                    if tier not in self.hidden_tiers:
-                        self.hidden_tiers.append(tier)
-            return
-        
-        current_tier_idx = tier_order.index(current_rank.tier)
-        completed_tiers = tier_order[:current_tier_idx]  # Tiers below current
-        incomplete_tiers = tier_order[current_tier_idx:]  # Current tier and above
-        
-        # Remove any incomplete tiers from collapsed/hidden lists
-        for tier in incomplete_tiers:
-            if tier in self.collapsed_tiers:
-                self.collapsed_tiers.remove(tier)
-            if tier in self.hidden_tiers:
-                self.hidden_tiers.remove(tier)
-        
-        # Auto-collapse/hide newly completed tiers if in auto mode
-        if self.auto_collapse_mode:
-            for tier in completed_tiers:
-                if tier not in self.collapsed_tiers:
-                    self.collapsed_tiers.append(tier)
-        
-        if self.auto_hide_mode:
-            for tier in completed_tiers:
-                if tier not in self.hidden_tiers:
-                    self.hidden_tiers.append(tier)
-
-# === STATE PERSISTENCE ===
-
-class StateManager:
-    """Handles saving/loading application state."""
-    
-    def __init__(self, data_dir: Optional[Path] = None, save_enabled: bool = True):
-        self.save_enabled = save_enabled
-        
-        if data_dir:
-            self.data_dir = data_dir
-        else:
-            # Default location
-            home = Path.home()
-            if os.name == 'nt':  # Windows
-                self.data_dir = home / "AppData" / "Roaming" / "mtga-manual-tracker"
-            else:  # Linux/Mac
-                self.data_dir = home / ".local" / "share" / "mtga-manual-tracker"
-        
-        if self.save_enabled:
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            self.state_file = self.data_dir / "tracker_state.json"
-    
-    def load_state(self) -> AppData:
-        """Load application state from file or create default."""
-        if not self.save_enabled or not self.state_file.exists():
-            return self._create_default_state()
-        
-        try:
-            with open(self.state_file, 'r') as f:
-                data = json.load(f)
-            
-            # Convert datetime strings back to objects
-            self._deserialize_datetimes(data)
-            self._deserialize_enums(data)
-            
-            # Migrate old format values to new BO1/BO3 system
-            self._migrate_format_values(data)
-            
-            # Reconstruct objects
-            constructed_rank = ManualRank(**data['constructed_rank'])
-            limited_rank = ManualRank(**data['limited_rank'])
-            
-            # Handle SessionStats with potential missing fields
-            stats_data = data['stats']
-            
-            # Reconstruct CompletedSession objects from session_history
-            if 'session_history' in stats_data and stats_data['session_history']:
-                session_history = []
-                for session_dict in stats_data['session_history']:
-                    session_history.append(CompletedSession(**session_dict))
-                stats_data['session_history'] = session_history
-            
-            stats = SessionStats(**stats_data)
-            
-            return AppData(
-                constructed_rank=constructed_rank,
-                limited_rank=limited_rank,
-                current_format=FormatType(data['current_format']),
-                stats=stats,
-                show_mythic_progress=data.get('show_mythic_progress', True),
-                collapsed_tiers=[RankTier(t) for t in data.get('collapsed_tiers', [])],
-                hidden_tiers=[RankTier(t) for t in data.get('hidden_tiers', [])],
-                auto_collapse_mode=data.get('auto_collapse_mode', False),
-                auto_hide_mode=data.get('auto_hide_mode', False)
-            )
-            
-        except Exception as e:
-            print(f"Error loading state: {e}")
-            return self._create_default_state()
-    
-    def save_state(self, app_data: AppData):
-        """Save application state to file."""
-        if not self.save_enabled:
-            return
-        
-        try:
-            # Convert to serializable format
-            data = {
-                'constructed_rank': asdict(app_data.constructed_rank),
-                'limited_rank': asdict(app_data.limited_rank),
-                'current_format': app_data.current_format.value,
-                'stats': asdict(app_data.stats),
-                'show_mythic_progress': app_data.show_mythic_progress,
-                'collapsed_tiers': [t.value for t in app_data.collapsed_tiers],
-                'hidden_tiers': [t.value for t in app_data.hidden_tiers],
-                'auto_collapse_mode': app_data.auto_collapse_mode,
-                'auto_hide_mode': app_data.auto_hide_mode
-            }
-            
-            # Serialize datetime objects
-            self._serialize_datetimes(data)
-            self._serialize_enums(data)
-            
-            with open(self.state_file, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-                
-        except Exception as e:
-            print(f"Error saving state: {e}")
-    
-    def _create_default_state(self) -> AppData:
-        """Create default application state."""
-        default_date = datetime.now() + timedelta(days=30)  # 30 days from now
-        
-        return AppData(
-            constructed_rank=ManualRank(
-                tier=RankTier.BRONZE,
-                division=4,
-                pips=0,
-                format_type=FormatType.CONSTRUCTED_BO1
-            ),
-            limited_rank=ManualRank(
-                tier=RankTier.BRONZE,
-                division=4, 
-                pips=0,
-                format_type=FormatType.LIMITED
-            ),
-            current_format=FormatType.CONSTRUCTED_BO1,
-            stats=SessionStats(
-                session_start_time=datetime.now(),
-                season_end_date=default_date
-            )
-        )
-    
-    def _serialize_datetimes(self, data: dict):
-        """Convert datetime objects to ISO strings for JSON serialization."""
-        def convert_datetime(obj):
-            if isinstance(obj, dict):
-                return {k: convert_datetime(v) for k, v in obj.items()}
-            elif isinstance(obj, datetime):
-                return obj.isoformat()
-            elif isinstance(obj, list):
-                return [convert_datetime(item) for item in obj]
-            else:
-                return obj
-        
-        # Update the data in place
-        for key, value in data.items():
-            data[key] = convert_datetime(value)
-    
-    def _serialize_enums(self, data: dict):
-        """Convert enum objects to string values for JSON serialization."""
-        def convert_enum(obj):
-            if isinstance(obj, dict):
-                return {k: convert_enum(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_enum(item) for item in obj]
-            elif hasattr(obj, 'value'):  # It's an enum
-                return obj.value
-            else:
-                return obj
-        
-        # Update the data in place
-        for key, value in data.items():
-            data[key] = convert_enum(value)
-    
-    def _deserialize_datetimes(self, data: dict):
-        """Convert ISO strings back to datetime objects."""
-        datetime_fields = [
-            'session_start_time', 'season_end_date', 'last_result_time',
-            'pause_start_time', 'game_start_time',  # Timer datetime fields
-            'start_time', 'end_time',  # For CompletedSession objects
-            'timestamp'  # For game_notes timestamps
-        ]
-        
-        def convert_iso_string(obj, parent_key=""):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    obj[k] = convert_iso_string(v, k)
-                return obj
-            elif isinstance(obj, str) and parent_key in datetime_fields:
-                try:
-                    return datetime.fromisoformat(obj)
-                except:
-                    return None
-            return obj
-        
-        for key, value in data.items():
-            data[key] = convert_iso_string(value, key)
-    
-    def _deserialize_enums(self, data: dict):
-        """Convert string values back to enum objects."""
-        # Handle session_goal_tier
-        if 'session_goal_tier' in data and isinstance(data['session_goal_tier'], str):
-            try:
-                data['session_goal_tier'] = RankTier(data['session_goal_tier'])
-            except (ValueError, TypeError):
-                data['session_goal_tier'] = None
-        
-        # Handle current_format 
-        if 'current_format' in data and isinstance(data['current_format'], str):
-            try:
-                data['current_format'] = FormatType(data['current_format'])
-            except (ValueError, TypeError):
-                data['current_format'] = FormatType.CONSTRUCTED_BO1
-    
-    def _migrate_format_values(self, data):
-        """Migrate old format enum values to new BO1/BO3 system."""
-        # Migrate current_format
-        if data.get('current_format') == 'Constructed':
-            data['current_format'] = 'Constructed BO1'
-        
-        # Migrate rank format_type fields
-        for rank_key in ['constructed_rank', 'limited_rank']:
-            if rank_key in data and 'format_type' in data[rank_key]:
-                if data[rank_key]['format_type'] == 'Constructed':
-                    data[rank_key]['format_type'] = 'Constructed BO1'
+# === STATE PERSISTENCE === (NOW IMPORTED FROM storage/ PACKAGE)
+# Previously contained StateManager class - moved to storage/state_manager.py
 
 # === TEXTUAL WIDGETS ===
 
@@ -1149,6 +225,42 @@ class RankProgressPanel(Static):
             lines.append(f"🔥 [bold red]BOSS FIGHT![/bold red] Next win → [bold]{next_tier}[/bold]! 🔥")
             lines.append("")  # Empty line for spacing
         
+        # Highest achieved rank indicator
+        if self.app_data.stats.season_highest_rank:
+            highest_rank = self.app_data.stats.season_highest_rank
+            
+            # Handle case where it might be a dict (backwards compatibility)
+            if isinstance(highest_rank, dict):
+                try:
+                    highest_rank = ManualRank(**highest_rank)
+                    self.app_data.stats.season_highest_rank = highest_rank  # Fix it for next time
+                except:
+                    highest_rank = None  # Skip display if conversion fails
+            
+            if highest_rank and highest_rank.is_mythic():
+                if highest_rank.mythic_rank:
+                    highest_text = f"👑 Season High: Mythic #{highest_rank.mythic_rank}"
+                else:
+                    highest_text = f"👑 Season High: Mythic {highest_rank.mythic_percentage:.1f}%"
+            else:
+                tier_name = highest_rank.tier.value if hasattr(highest_rank.tier, 'value') else highest_rank.tier
+                highest_text = f"⭐ Season High: {tier_name} {highest_rank.division} ({highest_rank.pips}/{highest_rank.max_pips})"
+            
+            lines.append(f"[bold cyan]{highest_text}[/bold cyan]")
+            
+            # Season Current right below Season High
+            if current_rank.is_mythic():
+                if current_rank.mythic_rank:
+                    current_text = f"📍 Season Current: Mythic #{current_rank.mythic_rank}"
+                else:
+                    current_text = f"📍 Season Current: Mythic {current_rank.mythic_percentage:.1f}%"
+            else:
+                tier_name = current_rank.tier.value if hasattr(current_rank.tier, 'value') else current_rank.tier
+                current_text = f"📍 Season Current: {tier_name} {current_rank.division} ({current_rank.pips}/{current_rank.max_pips})"
+            
+            lines.append(f"[bold white]{current_text}[/bold white]")
+            lines.append("")  # Empty line for spacing
+        
         # All rank tiers from Mythic down to Bronze
         tier_order = list(RankTier)
         tier_order.reverse()  # Mythic at top
@@ -1190,6 +302,7 @@ class RankProgressPanel(Static):
                             if not goal_attained:
                                 goal_marker = " ←GOAL"
                         
+                        
                         # Highlight current position with tier-colored background
                         if tier == current_rank.tier and div == current_rank.division:
                             tier_color = self._get_tier_color(tier)
@@ -1208,33 +321,50 @@ class RankProgressPanel(Static):
         return Static("\n".join(lines), classes="rank-bars")
     
     def _create_bar_display(self, tier: RankTier, division: int, current_rank: ManualRank) -> str:
-        """Create bar display for a specific tier/division."""
+        """Create bar display showing current progress vs highest achieved."""
         # Use the app's current format to determine bar count
         max_pips = 6 if self.app_data.current_format in [FormatType.CONSTRUCTED_BO1, FormatType.CONSTRUCTED_BO3] else 4
         bars = []
         
-        # Determine if this position is filled based on current rank
-        is_filled = self._is_position_filled(tier, division, current_rank)
+        # Get current progress for this tier/division
+        current_pips = 0
+        if tier == current_rank.tier and division == current_rank.division:
+            current_pips = current_rank.pips
+        elif self._is_position_filled(tier, division, current_rank):
+            current_pips = max_pips  # Fully completed
         
-        if is_filled:
-            # All bars filled - use tier-specific colors
-            tier_color = self._get_tier_color(tier)
-            for _ in range(max_pips):
+        # Get highest achieved progress for this tier/division
+        highest_pips = 0
+        if self.app_data.stats.season_highest_rank:
+            highest_rank = self.app_data.stats.season_highest_rank
+            
+            # Handle case where it might be a dict (backwards compatibility)
+            if isinstance(highest_rank, dict):
+                try:
+                    highest_rank = ManualRank(**highest_rank)
+                    self.app_data.stats.season_highest_rank = highest_rank
+                except:
+                    highest_rank = None
+            
+            if highest_rank:
+                if tier == highest_rank.tier and division == highest_rank.division:
+                    highest_pips = highest_rank.pips
+                elif self._is_position_filled_for_rank(tier, division, highest_rank):
+                    highest_pips = max_pips  # Fully completed by highest rank
+        
+        # Create visual representation: current [██] vs highest [░░] vs empty [  ]
+        tier_color = self._get_tier_color(tier)
+        
+        for i in range(max_pips):
+            if i < current_pips:
+                # Current progress - solid bars with tier color
                 bars.append(f"[{tier_color}][██][/{tier_color}]")
-        else:
-            # Check if this is current position (partially filled)
-            if tier == current_rank.tier and division == current_rank.division:
-                # Use tier-specific color for current position bars too
-                tier_color = self._get_tier_color(tier)
-                for i in range(max_pips):
-                    if i < current_rank.pips:
-                        bars.append(f"[{tier_color}][██][/{tier_color}]")
-                    else:
-                        bars.append("[  ]")
+            elif i < highest_pips:
+                # Highest achieved beyond current - light gray bars
+                bars.append("[rgb(128,128,128)][░░][/rgb(128,128,128)]")
             else:
-                # Empty bars
-                for _ in range(max_pips):
-                    bars.append("[  ]")
+                # Not achieved - empty
+                bars.append("[  ]")
         
         return "".join(bars)
     
@@ -1274,11 +404,56 @@ class RankProgressPanel(Static):
         
         return False
     
+    def _is_position_filled_for_rank(self, tier: RankTier, division: int, rank: ManualRank) -> bool:
+        """Check if a rank position should be displayed as filled for a specific rank."""
+        # Don't try to fill mythic bars - mythic doesn't have bars
+        if tier == RankTier.MYTHIC:
+            return False
+            
+        # If the rank is mythic, all non-mythic positions are filled
+        if rank.is_mythic():
+            return True
+        
+        tier_order = list(RankTier)[:-1]  # Exclude Mythic
+        rank_tier_idx = tier_order.index(rank.tier)
+        check_tier_idx = tier_order.index(tier)
+        
+        # Lower tiers are filled
+        if check_tier_idx < rank_tier_idx:
+            return True
+        
+        # Same tier, lower divisions are filled
+        if check_tier_idx == rank_tier_idx and division > rank.division:
+            return True
+        
+        return False
+    
     def _is_goal_rank(self, tier: RankTier, division: int) -> bool:
         """Check if this is the session goal rank."""
         stats = self.app_data.stats
         return (stats.session_goal_tier == tier and 
                 stats.session_goal_division == division)
+    
+    def _is_highest_rank(self, tier: RankTier, division: int) -> bool:
+        """Check if this is the season highest achieved rank."""
+        stats = self.app_data.stats
+        if not stats.season_highest_rank:
+            return False
+        
+        highest_rank = stats.season_highest_rank
+        
+        # Handle case where it might be a dict (backwards compatibility)
+        if isinstance(highest_rank, dict):
+            try:
+                highest_rank = ManualRank(**highest_rank)
+                stats.season_highest_rank = highest_rank  # Fix it for next time
+            except:
+                return False
+        
+        if not highest_rank:
+            return False
+            
+        return (highest_rank.tier == tier and highest_rank.division == division)
     
     def _is_goal_attained(self, current_rank: ManualRank, goal_tier, goal_division) -> bool:
         """Check if the session goal has been attained."""
@@ -1521,8 +696,43 @@ class StatsPanel(Static):
                 # It's just a string
                 start_rank = str(stats.season_start_rank)
         
-        return Static(f"""🏆 SEASON TOTAL [{format_name}]
-Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {stats.get_season_win_rate():.1f}%""", classes="season-section")
+        # Force fresh calculation of win rate and total games
+        total_games = stats.season_wins + stats.season_losses
+        win_rate = (stats.season_wins / total_games * 100) if total_games > 0 else 0.0
+        
+        # Format highest rank achieved
+        highest_text = "Not set"
+        if stats.season_highest_rank:
+            highest_rank = stats.season_highest_rank
+            
+            # Handle case where it might be a dict (backwards compatibility)
+            if isinstance(highest_rank, dict):
+                try:
+                    highest_rank = ManualRank(**highest_rank)
+                    stats.season_highest_rank = highest_rank  # Fix it for next time
+                except:
+                    highest_rank = None  # Skip display if conversion fails
+            
+            if highest_rank and highest_rank.is_mythic():
+                if highest_rank.mythic_rank:
+                    highest_text = f"Mythic #{highest_rank.mythic_rank} 👑"
+                else:
+                    highest_text = f"Mythic {highest_rank.mythic_percentage:.1f}% 👑"
+            else:
+                tier_name = highest_rank.tier.value if hasattr(highest_rank.tier, 'value') else highest_rank.tier
+                # Create visual progress bar for highest rank
+                progress_bar = ""
+                for i in range(highest_rank.max_pips):
+                    if i < highest_rank.pips:
+                        progress_bar += "█"  # Full block
+                    else:
+                        progress_bar += "░"  # Light shade
+                highest_text = f"{tier_name} {highest_rank.division} [{progress_bar}] ({highest_rank.pips}/{highest_rank.max_pips})"
+        
+        season_content = f"""🏆 SEASON TOTAL [{format_name}] ({total_games})
+Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
+        
+        return Static(season_content, classes="season-section", id="season-section")
     
     def _create_history_section(self) -> Static:
         """Create recent game notes section."""
@@ -1674,7 +884,10 @@ Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {stats.get_season_w
         else:
             l10_display = "L10: No games yet"
         
-        return f"""📊 CURRENT SESSION [{format_name}]
+        # Calculate total session games
+        total_session_games = stats.session_wins + stats.session_losses
+        
+        return f"""📊 CURRENT SESSION [{format_name}] ({total_session_games})
 Started:  [{start_time}]  Duration: {duration_text}{pause_status}
 Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.1f}%
 {l10_display}
@@ -1839,10 +1052,13 @@ class EditStatsModal(ModalScreen):
         if event.button.id == "save-btn":
             self._save_changes()
         elif event.button.id == "cancel-btn":
-            self.app.pop_screen()
+            self.dismiss(None)
     
     def _save_changes(self):
         """Save the edited values."""
+        # Debug to file
+        with open("debug.log", "a") as f:
+            f.write(f"[{datetime.now()}] EditStatsModal _save_changes called\n")
         try:
             # Session start time
             session_start_str = self.query_one("#session-start-input", Input).value
@@ -1907,15 +1123,15 @@ class EditStatsModal(ModalScreen):
             elif worst_loss_str == "":
                 self.stats.worst_loss_streak = 0
             
-                
-            self.result = "saved"
-            self.app.pop_screen()
+            with open("debug.log", "a") as f:
+                f.write(f"[{datetime.now()}] About to dismiss modal with result=saved. Season: {self.stats.season_wins}W-{self.stats.season_losses}L\n")
+            self.dismiss("saved")
             
         except Exception as e:
             self.app.notify(f"Error saving stats: {e}", severity="error")
     
     def action_cancel(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)
 
 class SetGoalModal(ModalScreen):
     """Modal dialog for setting session goal with dropdowns."""
@@ -3092,12 +2308,80 @@ class ManualTUIApp(App):
         modal = EditStatsModal(self.app_data.stats)
         
         def handle_result(result):
+            with open("debug.log", "a") as f:
+                f.write(f"[{datetime.now()}] EditStats modal returned: {result}\n")
             if result == "saved":
-                self.refresh_panels()
-                self.state_manager.save_state(self.app_data)
-                # Debug notification showing what was saved
+                # Force update milestone tracking to ensure UI shows correct values
                 stats = self.app_data.stats
-                self.notify(f"Stats updated! Best: W{stats.best_win_streak}, Worst: L{stats.worst_loss_streak}", severity="success")
+                
+                # Debug: Log the values before and after to see what's happening
+                old_session_rate = stats.last_session_win_rate
+                old_season_rate = stats.last_season_win_rate
+                
+                stats.last_session_win_rate = stats.get_session_win_rate()
+                stats.last_season_win_rate = stats.get_season_win_rate()
+                
+                # Debug log to file
+                with open("debug.log", "a") as f:
+                    f.write(f"[{datetime.now()}] Season stats updated: {stats.season_wins}W-{stats.season_losses}L = {stats.get_season_win_rate():.1f}%\n")
+                    f.write(f"[{datetime.now()}] Session stats updated: {stats.session_wins}W-{stats.session_losses}L = {stats.get_session_win_rate():.1f}%\n")
+                
+                # Try alternative refresh approach: update specific season section
+                try:
+                    # Force fresh calculation
+                    total_games = stats.season_wins + stats.season_losses
+                    win_rate = (stats.season_wins / total_games * 100) if total_games > 0 else 0.0
+                    format_name = self.app_data.current_format.value.upper()
+                    
+                    # Format highest rank achieved (same logic as _create_season_section)
+                    highest_text = "Not set"
+                    if stats.season_highest_rank:
+                        highest_rank = stats.season_highest_rank
+                        
+                        # Handle case where it might be a dict (backwards compatibility)
+                        if isinstance(highest_rank, dict):
+                            try:
+                                highest_rank = ManualRank(**highest_rank)
+                                stats.season_highest_rank = highest_rank  # Fix it for next time
+                            except:
+                                highest_rank = None  # Skip display if conversion fails
+                        
+                        if highest_rank and highest_rank.is_mythic():
+                            if highest_rank.mythic_rank:
+                                highest_text = f"Mythic #{highest_rank.mythic_rank} 👑"
+                            else:
+                                highest_text = f"Mythic {highest_rank.mythic_percentage:.1f}% 👑"
+                        else:
+                            tier_name = highest_rank.tier.value if hasattr(highest_rank.tier, 'value') else highest_rank.tier
+                            # Create visual progress bar for highest rank
+                            progress_bar = ""
+                            for i in range(highest_rank.max_pips):
+                                if i < highest_rank.pips:
+                                    progress_bar += "█"  # Full block
+                                else:
+                                    progress_bar += "░"  # Light shade
+                            highest_text = f"{tier_name} {highest_rank.division} [{progress_bar}] ({highest_rank.pips}/{highest_rank.max_pips})"
+                    
+                    new_season_content = f"""🏆 SEASON TOTAL [{format_name}] ({total_games})
+Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
+                    
+                    # Try to update the season section directly
+                    season_widget = self.query_one("#season-section", Static)
+                    season_widget.update(new_season_content)
+                    
+                except Exception as e:
+                    with open("debug.log", "a") as f:
+                        f.write(f"[{datetime.now()}] Direct update failed: {e}, falling back to full refresh\n")
+                    # Fall back to full panel refresh
+                    self.refresh_panels()
+                
+                self.update_status()  # Also update top panel timers
+                self.refresh()  # Force full app refresh
+                
+                # Schedule another refresh after the next render cycle
+                self.call_after_refresh(lambda: self.notify(f"Stats updated! Session: {stats.get_session_win_rate():.1f}%, Season: {win_rate:.1f}%", severity="success"))
+                
+                self.state_manager.save_state(self.app_data)
         
         self.push_screen(modal, handle_result)
     
@@ -3395,8 +2679,9 @@ Press any key to close this help."""
             # Add new panels with updated data
             main_content.mount(RankProgressPanel(self.app_data).add_class("left-panel"))
             main_content.mount(StatsPanel(self.app_data).add_class("right-panel"))
-        except:
-            pass  # Ignore if panels not found
+        except Exception as e:
+            # Log the error but continue
+            self.notify(f"Panel refresh error: {e}", severity="warning")
     
     def on_exit(self) -> None:
         """Save state before exit."""
