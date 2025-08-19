@@ -1837,6 +1837,88 @@ class GameNotesModal(ModalScreen):
         """Cancel and close modal."""
         self.dismiss(None)
 
+class AboutModal(ModalScreen):
+    """Modal dialog showing project information, licensing, and credits."""
+    
+    BINDINGS = [
+        Binding("escape", "cancel", "Close"),
+        Binding("enter", "cancel", "Close"),
+        Binding("ctrl+q", "quit", "Quit"),
+    ]
+    
+    CSS = """
+    AboutModal {
+        align: center middle;
+    }
+    
+    #about-dialog {
+        width: 90;
+        height: 30;
+        border: thick $primary;
+        background: $surface;
+        padding: 1;
+    }
+    
+    .about-content {
+        height: 100%;
+        scrollbar-gutter: stable;
+    }
+    
+    .about-section {
+        margin-bottom: 1;
+    }
+    
+    .about-title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 0;
+    }
+    
+    .license-text {
+        color: $text-muted;
+        text-style: italic;
+    }
+    """
+    
+    def compose(self) -> ComposeResult:
+        with Container(id="about-dialog"):
+            yield Label("MTGA Mythic Tracker TUI - About", classes="about-title")
+            with Container(classes="about-content"):
+                # Project info
+                yield Static("Terminal-based MTG Arena session tracker\nManual rank progression with goals and statistics\nSession timers and game tracking", classes="about-section")
+                
+                # Fan Content Policy
+                yield Static("Fan Content Policy", classes="about-title")
+                yield Static("MTGA Mythic Tracker TUI is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.", classes="about-section license-text")
+                
+                # AI Development
+                yield Static("Development", classes="about-title") 
+                yield Static("This project was developed with AI assistance (Claude/Anthropic) as a collaborative coding tool, with all architectural decisions, requirements, and creative direction provided by human developers.", classes="about-section license-text")
+                
+                # Dual Licensing
+                yield Static("Licensing", classes="about-title")
+                yield Static("Dual-licensed under:\n• MIT License - For strict legal certainty\n• Vibe-Coder License (VCL-0.1-Experimental) - For those who serve the vibe", classes="about-section")
+                
+                # Credits
+                yield Static("Credits", classes="about-title")
+                yield Static("The Vibe-Coder License (VCL-0.1-Experimental) was vibe-coded by Tyraziel\nwith co-creative help from Byte (ChatGPT AI sidekick).", classes="about-section license-text")
+                
+                # GitHub links
+                yield Static("Project Repository", classes="about-title")
+                yield Static("https://github.com/tyraziel/mtga-mythic-tracker-tui", classes="about-section")
+                yield Static("VCL License Info: https://github.com/tyraziel/vibe-coder-license", classes="about-section license-text")
+                
+                yield Static("\n[bold]Press ESC or Enter to close[/bold]", classes="about-section")
+
+    def action_cancel(self) -> None:
+        """Close the about dialog."""
+        self.dismiss()
+    
+    def action_quit(self) -> None:
+        """Quit the entire application."""
+        self.app.exit()
+
 # === MAIN APPLICATION ===
 
 class ManualTUIApp(App):
@@ -2056,6 +2138,7 @@ class ManualTUIApp(App):
         Binding("ctrl+n", "view_all_notes", "View All Notes"),
         Binding("ctrl+q", "quit", "Quit"),
         Binding("?", "help", "Help"),
+        Binding("i", "about", "About"),
     ]
     
     def __init__(self, state_manager: StateManager):
@@ -2616,7 +2699,7 @@ M - Toggle mythic progress
 C - Collapse tiers      H - Hide tiers
 R - Restart session     P - Pause/Resume timer
 Shift+S - Start game    S - Set rank manually   
-Ctrl+Q - Quit
+Ctrl+Q - Quit           I - About/Info
 
 Manual Editing:
 Click any [bracketed] value to edit inline
@@ -2626,6 +2709,10 @@ ESC to cancel editing
 Press any key to close this help."""
         
         self.push_screen(ConfirmationModal(help_text))
+    
+    def action_about(self) -> None:
+        """Show about dialog with project info and licensing."""
+        self.push_screen(AboutModal())
 
     def action_set_rank(self) -> None:
         """Set rank manually via modal with dropdowns."""
