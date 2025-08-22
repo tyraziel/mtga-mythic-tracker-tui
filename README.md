@@ -1,6 +1,10 @@
 # mtga-mythic-tracker-tui
 A TUI based tracker for MTGA Mythic Runs
 
+<p align="left">
+  <img src="images/tui.png" alt="MTGA Mythic Tracker TUI" width="1024"/>
+</p>
+
 ## Quick Start
 
 ### Running the Manual TUI
