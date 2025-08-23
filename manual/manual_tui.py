@@ -730,7 +730,7 @@ class StatsPanel(Static):
                 highest_text = f"{tier_name} {highest_rank.division} [{progress_bar}] ({highest_rank.pips}/{highest_rank.max_pips})"
         
         season_content = f"""🏆 SEASON TOTAL [{format_name}] ({total_games})
-Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
+Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.2f}%"""
         
         return Static(season_content, classes="season-section", id="season-section")
     
@@ -889,7 +889,7 @@ Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
         
         return f"""📊 CURRENT SESSION [{format_name}] ({total_session_games})
 Started:  [{start_time}]  Duration: {duration_text}{pause_status}
-Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.1f}%
+Record:   [{stats.session_wins}W] - [{stats.session_losses}L]  {stats.get_session_win_rate():.2f}%
 {l10_display}
 Streak:   {current_streak_text}
 {avg_game_text}Last: {last_result_text}{game_timer_text}"""
@@ -2406,8 +2406,8 @@ class ManualTUIApp(App):
                 
                 # Debug log to file
                 with open("debug.log", "a") as f:
-                    f.write(f"[{datetime.now()}] Season stats updated: {stats.season_wins}W-{stats.season_losses}L = {stats.get_season_win_rate():.1f}%\n")
-                    f.write(f"[{datetime.now()}] Session stats updated: {stats.session_wins}W-{stats.session_losses}L = {stats.get_session_win_rate():.1f}%\n")
+                    f.write(f"[{datetime.now()}] Season stats updated: {stats.season_wins}W-{stats.season_losses}L = {stats.get_season_win_rate():.2f}%\n")
+                    f.write(f"[{datetime.now()}] Session stats updated: {stats.session_wins}W-{stats.session_losses}L = {stats.get_session_win_rate():.2f}%\n")
                 
                 # Try alternative refresh approach: update specific season section
                 try:
@@ -2446,7 +2446,7 @@ class ManualTUIApp(App):
                             highest_text = f"{tier_name} {highest_rank.division} [{progress_bar}] ({highest_rank.pips}/{highest_rank.max_pips})"
                     
                     new_season_content = f"""🏆 SEASON TOTAL [{format_name}] ({total_games})
-Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
+Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.2f}%"""
                     
                     # Try to update the season section directly
                     season_widget = self.query_one("#season-section", Static)
@@ -2462,7 +2462,7 @@ Record:   [{stats.season_wins}W] - [{stats.season_losses}L]  {win_rate:.1f}%"""
                 self.refresh()  # Force full app refresh
                 
                 # Schedule another refresh after the next render cycle
-                self.call_after_refresh(lambda: self.notify(f"Stats updated! Session: {stats.get_session_win_rate():.1f}%, Season: {win_rate:.1f}%", severity="success"))
+                self.call_after_refresh(lambda: self.notify(f"Stats updated! Session: {stats.get_session_win_rate():.2f}%, Season: {win_rate:.2f}%", severity="success"))
                 
                 self.state_manager.save_state(self.app_data)
         
